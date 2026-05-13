@@ -1,0 +1,122 @@
+No files changed, compilation skipped
+[32mScript ran successfully.[0m
+
+== Logs ==
+  =================================================
+     XENORIZE AMM -- DEPLOYMENT
+  =================================================
+  Chain ID  : 31337
+  Deployer  : 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+  Owner     : 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+  Token0    : 0x0000000000000000000000000000000000000000
+  Token1    : 0x0000000000000000000000000000000000000000
+  -------------------------------------------------
+  Deploying InsuranceFund...
+    InsuranceFund : 0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6
+  Deploying DynamicFeeHook...
+    DynamicFeeHook: 0x8A791620dd6260079BF849Dc5567aDC3F2FdC318
+  Deploying AutoCompounder...
+    AutoCompounder: 0x610178dA211FEF7D417bC0e6FeD39F05609AD788
+  Configuring authorizations...
+    AutoCompounder authorized in InsuranceFund
+  =================================================
+     DEPLOYMENT COMPLETE
+  =================================================
+  InsuranceFund  : 0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6
+  DynamicFeeHook : 0x8A791620dd6260079BF849Dc5567aDC3F2FdC318
+  AutoCompounder : 0x610178dA211FEF7D417bC0e6FeD39F05609AD788
+  =================================================
+  POST-DEPLOY CHECKLIST:
+  [ ] Verify contracts on block explorer
+  [ ] Seed insurance fund with initial tokens
+  [ ] Set TVL cap via setMaxTVLCap()
+  [ ] Start keeper bot
+  [ ] Open bug bounty
+  =================================================
+[33mEIP-3855 is not supported in one or more of the RPCs used.
+Unsupported Chain IDs: 31337.
+Contracts deployed with a Solidity version equal or higher than 0.8.20 might not work properly.
+For more information, please see https://eips.ethereum.org/EIPS/eip-3855[0m
+
+## Setting up 1 EVM.
+
+==========================
+
+Chain 31337
+
+Estimated gas price: 4.576003878 gwei
+
+Estimated total gas used for script: 7105605
+
+Estimated amount required: 0.03251527603553619 ETH
+
+==========================
+
+###
+Finding wallets for all the necessary addresses...
+##
+Sending transactions [0 - 5].
+
+Transactions saved to: /home/hans/AMM/AutomatedMarketMakers/xenorize/broadcast/Deploy.s.sol/31337/run-latest.json
+
+Sensitive values saved to: /home/hans/AMM/AutomatedMarketMakers/xenorize/cache/Deploy.s.sol/31337/run-latest.json
+
+##
+Waiting for receipts.
+
+##### anvil-hardhat
+✅  [Success]Hash: 0x79d73d09d367719cae66387247a9768f8d853a1c61db4f3f8ff3b1bfbafa17bb
+Contract Address: 0x0165878A594ca255338adfa4d48449f69242Eb8F
+Block: 4
+Paid: 0.001711559942971353 ETH (461921 gas * 3.705308793 gwei)
+
+
+##### anvil-hardhat
+✅  [Success]Hash: 0x7baa1bcf595391ff139f4aa6691cd9ac7b543e9a8e0447707f149ef866d68fc7
+Contract Address: 0xa513E6E4b8f2a923D98304ec87F64353C4D5C853
+Block: 4
+Paid: 0.003423119885942706 ETH (923842 gas * 3.705308793 gwei)
+
+
+##### anvil-hardhat
+✅  [Success]Hash: 0xe4245dbeeec382b82e5a154762b1b32576c30e5784cf21feec7298ebf6df2501
+Contract Address: 0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6
+Block: 5
+Paid: 0.004452738953070452 ETH (1229164 gas * 3.622575143 gwei)
+
+
+##### anvil-hardhat
+✅  [Success]Hash: 0x474323e2c200113171c513b46c5437c32d02c3444a9fd91c10766f58ac19b616
+Contract Address: 0x8A791620dd6260079BF849Dc5567aDC3F2FdC318
+Block: 5
+Paid: 0.007729043005876511 ETH (2133577 gas * 3.622575143 gwei)
+
+
+##### anvil-hardhat
+✅  [Success]Hash: 0xc2e31c17f271db1e22a54f2d8602209473b70d0ed8463f30a35521cefcaa7fff
+Contract Address: 0x610178dA211FEF7D417bC0e6FeD39F05609AD788
+Block: 5
+Paid: 0.016283239800400705 ETH (4494935 gas * 3.622575143 gwei)
+
+
+##### anvil-hardhat
+✅  [Success]Hash: 0x315395cf5bbd450278388cbc66bbf931d9d6db195b70a0353f958da14280c4d2
+Block: 5
+Paid: 0.016449226193452965 ETH (4540755 gas * 3.622575143 gwei)
+
+
+Transactions saved to: /home/hans/AMM/AutomatedMarketMakers/xenorize/broadcast/Deploy.s.sol/31337/run-latest.json
+
+Sensitive values saved to: /home/hans/AMM/AutomatedMarketMakers/xenorize/cache/Deploy.s.sol/31337/run-latest.json
+
+
+
+==========================
+
+ONCHAIN EXECUTION COMPLETE & SUCCESSFUL.
+Total Paid: 0.050048927781714692 ETH (13784194 gas * avg 3.650153026 gwei)
+
+Transactions saved to: /home/hans/AMM/AutomatedMarketMakers/xenorize/broadcast/Deploy.s.sol/31337/run-latest.json
+
+Sensitive values saved to: /home/hans/AMM/AutomatedMarketMakers/xenorize/cache/Deploy.s.sol/31337/run-latest.json
+

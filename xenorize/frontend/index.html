@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Xenorize AMM — Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
+<style>
+  :root {
+    --bg:       #0d0f14;
+    --surface:  #161a22;
+    --border:   #252b38;
+    --accent:   #4f8fff;
+    --accent2:  #7c3aed;
+    --green:    #22c55e;
+    --red:      #ef4444;
+    --yellow:   #f59e0b;
+    --text:     #e2e8f0;
+    --muted:    #64748b;
+    --radius:   10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Inter', 'Segoe UI', sans-serif; font-size: 14px; line-height: 1.6; }
+
+  /* ── Layout ──────────────────────────────────────────── */
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 10; }
+  .logo { font-size: 18px; font-weight: 700; background: linear-gradient(135deg, var(--accent), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .main { max-width: 1200px; margin: 0 auto; padding: 24px 16px; display: grid; gap: 20px; }
+
+  /* ── Cards ───────────────────────────────────────────── */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
+  .card-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+  .card-title .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+
+  /* ── Grid layouts ────────────────────────────────────── */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  @media (max-width: 768px) { .grid-2,.grid-3,.grid-4 { grid-template-columns: 1fr; } }
+
+  /* ── Stat boxes ──────────────────────────────────────── */
+  .stat { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+  .stat-label { font-size: 11px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .06em; }
+  .stat-value { font-size: 20px; font-weight: 700; color: var(--text); }
+  .stat-value.green { color: var(--green); }
+  .stat-value.red   { color: var(--red);   }
+  .stat-value.yellow{ color: var(--yellow);}
+  .stat-value.accent{ color: var(--accent);}
+  .stat-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* ── Badges ──────────────────────────────────────────── */
+  .badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+  .badge.green  { background: #14532d44; color: var(--green); border: 1px solid #16a34a55; }
+  .badge.red    { background: #7f1d1d44; color: var(--red);   border: 1px solid #dc262655; }
+  .badge.yellow { background: #78350f44; color: var(--yellow); border: 1px solid #d9770055; }
+  .badge .blink { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: blink 1.4s infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  /* ── Buttons ─────────────────────────────────────────── */
+  .btn { padding: 8px 16px; border-radius: 7px; border: none; cursor: pointer; font-size: 13px; font-weight: 600; transition: opacity .15s, transform .1s; }
+  .btn:hover { opacity: .85; transform: translateY(-1px); }
+  .btn:active { transform: translateY(0); }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-secondary { background: var(--border); color: var(--text); }
+  .btn-danger { background: var(--red); color: #fff; }
+  .btn-sm { padding: 5px 11px; font-size: 12px; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+
+  /* ── Inputs ──────────────────────────────────────────── */
+  .input-row { display: flex; gap: 8px; align-items: center; }
+  input[type=text], input[type=number] {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
+    color: var(--text); padding: 8px 12px; font-size: 13px; flex: 1; outline: none;
+    transition: border-color .15s;
+  }
+  input:focus { border-color: var(--accent); }
+  label { font-size: 12px; color: var(--muted); margin-bottom: 4px; display: block; }
+
+  /* ── Address pill ────────────────────────────────────── */
+  .addr { font-family: monospace; font-size: 11px; color: var(--accent); background: #1e2a42; padding: 2px 7px; border-radius: 4px; cursor: pointer; }
+  .addr:hover { text-decoration: underline; }
+
+  /* ── Table ───────────────────────────────────────────── */
+  .tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .tbl th { color: var(--muted); font-weight: 600; text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); text-transform: uppercase; font-size: 11px; }
+  .tbl td { padding: 8px 10px; border-bottom: 1px solid #1a1f2a; vertical-align: middle; }
+  .tbl tr:last-child td { border-bottom: none; }
+  .tbl tr:hover td { background: #1a1e28; }
+  .mono { font-family: monospace; }
+
+  /* ── Progress bar ────────────────────────────────────── */
+  .progress-wrap { background: var(--bg); border-radius: 4px; height: 8px; overflow: hidden; }
+  .progress-bar  { height: 100%; border-radius: 4px; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .4s; }
+
+  /* ── Misc ────────────────────────────────────────────── */
+  .section-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+  .divider { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+  .log { background: var(--bg); border: 1px solid var(--border); border-radius: 7px; padding: 10px 12px; font-family: monospace; font-size: 12px; max-height: 160px; overflow-y: auto; color: var(--muted); }
+  .log .ok   { color: var(--green); }
+  .log .err  { color: var(--red); }
+  .log .info { color: var(--accent); }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .flex-gap { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .tag { background: #1e2a42; color: var(--accent); border-radius: 4px; padding: 2px 8px; font-size: 11px; font-family: monospace; }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════ HEADER ══ -->
+<header>
+  <span class="logo">⬡ Xenorize AMM</span>
+  <div class="flex-gap">
+    <span id="network-badge" class="badge yellow"><span class="blink"></span>Disconnected</span>
+    <span id="wallet-addr" style="font-family:monospace;font-size:12px;color:var(--muted)"></span>
+    <button class="btn btn-primary btn-sm" onclick="connectWallet()">Connect Wallet</button>
+    <button class="btn btn-secondary btn-sm" onclick="connectLocal()">Anvil Local</button>
+  </div>
+</header>
+
+<div class="main">
+
+  <!-- ── Contract Addresses ── -->
+  <div class="card">
+    <div class="card-title"><span class="dot"></span>Contract Addresses</div>
+    <div class="grid-3" style="gap:12px">
+      <div>
+        <label>Insurance Fund</label>
+        <div class="input-row">
+          <input type="text" id="addr-fund" placeholder="0x…" />
+        </div>
+      </div>
+      <div>
+        <label>AutoCompounder</label>
+        <div class="input-row">
+          <input type="text" id="addr-comp" placeholder="0x…" />
+        </div>
+      </div>
+      <div>
+        <label>DynamicFeeHook</label>
+        <div class="input-row">
+          <input type="text" id="addr-hook" placeholder="0x…" />
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:8px">
+      <button class="btn btn-primary btn-sm" onclick="loadAll()">Load State</button>
+      <button class="btn btn-secondary btn-sm" onclick="fillDemo()">Use Demo Addresses</button>
+      <span id="load-spinner" style="display:none"><span class="spinner"></span></span>
+    </div>
+  </div>
+
+  <!-- ── Protocol Overview ── -->
+  <div class="card">
+    <div class="section-row">
+      <div class="card-title" style="margin:0"><span class="dot"></span>Protocol Overview</div>
+      <button class="btn btn-secondary btn-sm" onclick="loadAll()">↻ Refresh</button>
+    </div>
+    <div class="grid-4">
+      <div class="stat">
+        <div class="stat-label">Total TVL</div>
+        <div class="stat-value accent" id="ov-tvl">—</div>
+        <div class="stat-sub">AutoCompounder</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Fund Balance (T0)</div>
+        <div class="stat-value green" id="ov-fund0">—</div>
+        <div class="stat-sub">Insurance Fund</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Total Positions</div>
+        <div class="stat-value" id="ov-positions">—</div>
+        <div class="stat-sub">All-time opened</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Base Fee</div>
+        <div class="stat-value yellow" id="ov-fee">—</div>
+        <div class="stat-sub">DynamicFeeHook</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+
+    <!-- ── Insurance Fund ── -->
+    <div class="card">
+      <div class="section-row">
+        <div class="card-title" style="margin:0"><span class="dot" style="background:var(--green)"></span>Insurance Fund</div>
+        <div id="fund-status" class="badge yellow">—</div>
+      </div>
+      <div class="grid-2" style="margin-bottom:14px">
+        <div class="stat">
+          <div class="stat-label">Balance Token0</div>
+          <div class="stat-value green" id="fund-bal0">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Balance Token1</div>
+          <div class="stat-value green" id="fund-bal1">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Total Deposited0</div>
+          <div class="stat-value" id="fund-dep0">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Total Paid Out0</div>
+          <div class="stat-value red" id="fund-paid0">—</div>
+        </div>
+      </div>
+      <div style="margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:4px">
+          <span>Fund Health</span><span id="fund-health-pct">—</span>
+        </div>
+        <div class="progress-wrap"><div class="progress-bar" id="fund-health-bar" style="width:0%"></div></div>
+      </div>
+      <hr class="divider">
+      <div>
+        <label>Owner</label>
+        <div id="fund-owner" class="addr">—</div>
+      </div>
+    </div>
+
+    <!-- ── AutoCompounder ── -->
+    <div class="card">
+      <div class="section-row">
+        <div class="card-title" style="margin:0"><span class="dot" style="background:var(--accent2)"></span>AutoCompounder</div>
+        <div id="comp-status" class="badge yellow">—</div>
+      </div>
+      <div class="grid-2" style="margin-bottom:14px">
+        <div class="stat">
+          <div class="stat-label">Total TVL</div>
+          <div class="stat-value accent" id="comp-tvl">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Total Positions</div>
+          <div class="stat-value" id="comp-pos">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">TVL Cap</div>
+          <div class="stat-value yellow" id="comp-cap">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Protocol Fee</div>
+          <div class="stat-value" id="comp-fee">—</div>
+          <div class="stat-sub">+ <span id="comp-keeper">—</span> keeper</div>
+        </div>
+      </div>
+      <div style="margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:4px">
+          <span>TVL Utilization</span><span id="comp-util">—</span>
+        </div>
+        <div class="progress-wrap"><div class="progress-bar" id="comp-util-bar" style="width:0%;background:linear-gradient(90deg,var(--accent2),var(--accent))"></div></div>
+      </div>
+      <hr class="divider">
+      <div class="flex-gap">
+        <div><label>Min Deposit</label><span id="comp-min" class="tag">—</span></div>
+        <div><label>Oracle</label><span id="comp-oracle" class="addr" style="font-size:10px">—</span></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Dynamic Fee Hook ── -->
+  <div class="card">
+    <div class="section-row">
+      <div class="card-title" style="margin:0"><span class="dot" style="background:var(--yellow)"></span>Dynamic Fee Hook</div>
+      <div id="hook-status" class="badge yellow">—</div>
+    </div>
+    <div class="grid-4">
+      <div class="stat">
+        <div class="stat-label">Base Fee</div>
+        <div class="stat-value yellow" id="hook-base">—</div>
+        <div class="stat-sub">BPS</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Target Volatility</div>
+        <div class="stat-value" id="hook-vol">—</div>
+        <div class="stat-sub">BPS</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">MEV Threshold</div>
+        <div class="stat-value" id="hook-mev">—</div>
+        <div class="stat-sub">BPS</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Timelock Delay</div>
+        <div class="stat-value" id="hook-timelock">—</div>
+      </div>
+    </div>
+    <hr class="divider">
+    <div class="grid-3">
+      <div><label>Owner</label><div id="hook-owner" class="addr">—</div></div>
+      <div><label>Fee Recipient</label><div id="hook-recip" class="addr">—</div></div>
+      <div><label>Oracle</label><div id="hook-oracle" class="addr">—</div></div>
+    </div>
+
+    <!-- Preview Fee -->
+    <hr class="divider">
+    <div class="card-title" style="margin-bottom:10px"><span class="dot" style="background:var(--yellow);width:6px;height:6px"></span>Preview Dynamic Fee</div>
+    <div class="grid-3" style="gap:10px;align-items:end">
+      <div>
+        <label>Pool ID (bytes32 hex)</label>
+        <input type="text" id="preview-pool" placeholder="0x0000…" value="0x0000000000000000000000000000000000000000000000000000000000000001" />
+      </div>
+      <div>
+        <label>Swap Size USD (wei)</label>
+        <input type="text" id="preview-size" placeholder="100000000000000000000" value="100000000000000000000" />
+      </div>
+      <div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="text" id="preview-result" placeholder="Result BPS" readonly style="flex:1" />
+          <button class="btn btn-secondary btn-sm" onclick="previewFee()">Preview</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Position Lookup ── -->
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:var(--accent2)"></span>Position Lookup</div>
+    <div class="grid-2" style="gap:16px">
+      <div>
+        <label>Lookup by Position ID (bytes32)</label>
+        <div class="input-row">
+          <input type="text" id="pos-id-input" placeholder="0x…" />
+          <button class="btn btn-secondary btn-sm" onclick="lookupPosition()">Fetch</button>
+        </div>
+      </div>
+      <div>
+        <label>Lookup Positions by Owner Address</label>
+        <div class="input-row">
+          <input type="text" id="pos-owner-input" placeholder="0x…" />
+          <button class="btn btn-secondary btn-sm" onclick="lookupByOwner()">Fetch</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="position-detail" style="display:none;margin-top:16px">
+      <hr class="divider">
+      <div class="grid-4" style="margin-bottom:12px">
+        <div class="stat"><div class="stat-label">Owner</div><div class="stat-value" style="font-size:11px;font-family:monospace" id="pd-owner">—</div></div>
+        <div class="stat"><div class="stat-label">Status</div><div id="pd-status">—</div></div>
+        <div class="stat"><div class="stat-label">Risk Profile</div><div class="stat-value" id="pd-risk">—</div></div>
+        <div class="stat"><div class="stat-label">Compound Count</div><div class="stat-value accent" id="pd-cycles">—</div></div>
+      </div>
+      <div class="grid-4">
+        <div class="stat"><div class="stat-label">Initial Capital 0</div><div class="stat-value" id="pd-cap0">—</div></div>
+        <div class="stat"><div class="stat-label">Initial Capital 1</div><div class="stat-value" id="pd-cap1">—</div></div>
+        <div class="stat"><div class="stat-label">Total Fees 0</div><div class="stat-value green" id="pd-fees0">—</div></div>
+        <div class="stat"><div class="stat-label">Total IL 0</div><div class="stat-value red" id="pd-il0">—</div></div>
+      </div>
+      <div class="grid-2" style="margin-top:10px">
+        <div class="stat"><div class="stat-label">Tick Range</div><div class="stat-value" style="font-size:14px" id="pd-ticks">—</div></div>
+        <div class="stat"><div class="stat-label">Last Compound</div><div class="stat-value" style="font-size:14px" id="pd-lastcomp">—</div></div>
+      </div>
+    </div>
+
+    <div id="owner-positions" style="display:none;margin-top:16px">
+      <hr class="divider">
+      <div class="card-title" style="margin-bottom:8px"><span class="dot" style="width:6px;height:6px;background:var(--accent2)"></span>Positions owned</div>
+      <div id="owner-pos-list"></div>
+    </div>
+  </div>
+
+  <!-- ── Activity Log ── -->
+  <div class="card">
+    <div class="section-row">
+      <div class="card-title" style="margin:0"><span class="dot" style="background:var(--muted)"></span>Activity Log</div>
+      <button class="btn btn-secondary btn-sm" onclick="clearLog()">Clear</button>
+    </div>
+    <div class="log" id="log">
+      <span class="info">Ready. Connect wallet or Anvil local to get started.</span>
+    </div>
+  </div>
+
+</div><!-- /main -->
+
+<script>
+// ══════════════════════════════════════════════════════════
+//  XENORIZE DASHBOARD — ethers v6
+// ══════════════════════════════════════════════════════════
+
+const ABIS = {
+  InsuranceFund: [
+    "function fundBalance0() view returns (uint256)",
+    "function fundBalance1() view returns (uint256)",
+    "function totalDeposited0() view returns (uint256)",
+    "function totalDeposited1() view returns (uint256)",
+    "function totalPaidOut0() view returns (uint256)",
+    "function totalPaidOut1() view returns (uint256)",
+    "function totalTVL() view returns (uint256)",
+    "function owner() view returns (address)",
+    "function autoCompounder() view returns (address)",
+    "function token0() view returns (address)",
+    "function token1() view returns (address)",
+    "function paused() view returns (bool)",
+    "function getFundHealthBps() view returns (uint256)",
+    "function getFundState() view returns (tuple(uint256 balance0,uint256 balance1,uint256 totalClaimed0,uint256 totalClaimed1,uint256 pendingClaims,bool claimsSuspended,uint256 lastUpdatedBlock))",
+  ],
+  AutoCompounder: [
+    "function totalTVL() view returns (uint256)",
+    "function totalPositions() view returns (uint256)",
+    "function maxTVLCap() view returns (uint256)",
+    "function minDepositAmount() view returns (uint256)",
+    "function protocolFeeBps() view returns (uint256)",
+    "function keeperRewardBps() view returns (uint256)",
+    "function paused() view returns (bool)",
+    "function owner() view returns (address)",
+    "function oracle() view returns (address)",
+    "function getPosition(bytes32 id) view returns (tuple(address owner,bytes32 poolId,int24 tickLower,int24 tickUpper,uint128 liquidity,uint256 depositTime,uint256 lastCompound,uint256 compoundCount,uint256 initialCapital0,uint256 initialCapital1,uint256 totalFees0,uint256 totalFees1,uint256 totalIL0,uint8 riskProfile,uint8 status))",
+    "function getPositionsByOwner(address a) view returns (bytes32[])",
+    "function getCompoundUrgency(bytes32 id) view returns (uint8)",
+  ],
+  DynamicFeeHook: [
+    "function baseFee() view returns (uint24)",
+    "function targetVolBps() view returns (uint256)",
+    "function mevThresholdBps() view returns (uint256)",
+    "function oracleMaxAge() view returns (uint256)",
+    "function paused() view returns (bool)",
+    "function owner() view returns (address)",
+    "function feeRecipient() view returns (address)",
+    "function oracle() view returns (address)",
+    "function TIMELOCK_DELAY() view returns (uint256)",
+    "function previewFee(bytes32 poolId, uint256 swapAmountUSD, bool mevDetected) view returns (uint24)",
+  ],
+};
+
+const RISK   = ['Conservative', 'Balanced', 'Aggressive'];
+const STATUS = ['Active', 'OutOfRange', 'Closed'];
+const URGENCY= ['None', 'Low', 'Medium', 'High', 'Immediate'];
+
+let provider = null;
+let signer   = null;
+let contracts = {};
+
+// ── Logging ────────────────────────────────────────────
+function log(msg, type='') {
+  const el = document.getElementById('log');
+  const line = document.createElement('div');
+  line.className = type;
+  line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+function clearLog() { document.getElementById('log').innerHTML = ''; }
+
+// ── Connection ─────────────────────────────────────────
+async function connectWallet() {
+  if (!window.ethereum) { log('MetaMask not found', 'err'); return; }
+  try {
+    provider = new ethers.BrowserProvider(window.ethereum);
+    signer   = await provider.getSigner();
+    const addr   = await signer.getAddress();
+    const net    = await provider.getNetwork();
+    document.getElementById('wallet-addr').textContent = shortAddr(addr);
+    setBadge('network-badge', `Chain ${net.chainId}`, 'green');
+    log(`Connected: ${addr} on chain ${net.chainId}`, 'ok');
+  } catch(e) { log(e.message, 'err'); }
+}
+
+async function connectLocal() {
+  try {
+    provider = new ethers.JsonRpcProvider('http://127.0.0.1:8545');
+    const net = await provider.getNetwork();
+    const accounts = await provider.send('eth_accounts', []);
+    if (accounts.length) {
+      signer = await provider.getSigner(accounts[0]);
+      document.getElementById('wallet-addr').textContent = shortAddr(accounts[0]);
+    }
+    setBadge('network-badge', `Anvil (${net.chainId})`, 'green');
+    log(`Connected to Anvil — chain ${net.chainId}`, 'ok');
+  } catch(e) { log('Anvil not running? ' + e.message, 'err'); }
+}
+
+// ── Load contracts ─────────────────────────────────────
+function getContracts() {
+  const p = provider || (window.ethereum ? new ethers.BrowserProvider(window.ethereum) : null);
+  if (!p) { log('Not connected', 'err'); return null; }
+  const fundAddr = document.getElementById('addr-fund').value.trim();
+  const compAddr = document.getElementById('addr-comp').value.trim();
+  const hookAddr = document.getElementById('addr-hook').value.trim();
+
+  const c = {};
+  if (fundAddr) c.fund = new ethers.Contract(fundAddr, ABIS.InsuranceFund, p);
+  if (compAddr) c.comp = new ethers.Contract(compAddr, ABIS.AutoCompounder, p);
+  if (hookAddr) c.hook = new ethers.Contract(hookAddr, ABIS.DynamicFeeHook, p);
+  return c;
+}
+
+async function loadAll() {
+  const c = getContracts();
+  if (!c) return;
+  document.getElementById('load-spinner').style.display = '';
+  log('Loading contract state…', 'info');
+
+  const tasks = [];
+  if (c.fund) tasks.push(loadFund(c.fund));
+  if (c.comp) tasks.push(loadComp(c.comp));
+  if (c.hook) tasks.push(loadHook(c.hook));
+
+  await Promise.allSettled(tasks);
+  document.getElementById('load-spinner').style.display = 'none';
+  log('State loaded.', 'ok');
+}
+
+// ── InsuranceFund ──────────────────────────────────────
+async function loadFund(fund) {
+  try {
+    const [b0, b1, dep0, dep1, paid0, paid1, paused, owner, health] = await Promise.all([
+      fund.fundBalance0(), fund.fundBalance1(),
+      fund.totalDeposited0(), fund.totalDeposited1(),
+      fund.totalPaidOut0(), fund.totalPaidOut1(),
+      fund.paused(), fund.owner(), fund.getFundHealthBps(),
+    ]);
+
+    setText('fund-bal0',  fmt18(b0));
+    setText('fund-bal1',  fmt18(b1));
+    setText('fund-dep0',  fmt18(dep0));
+    setText('fund-paid0', fmt18(paid0));
+    setText('fund-owner', shortAddr(owner));
+    document.getElementById('fund-owner').title = owner;
+
+    const hPct = Number(health) / 100;
+    setText('fund-health-pct', hPct.toFixed(1) + '%');
+    document.getElementById('fund-health-bar').style.width = Math.min(hPct, 100) + '%';
+    document.getElementById('fund-health-bar').style.background =
+      hPct > 20 ? 'linear-gradient(90deg,var(--green),#16a34a)' :
+      hPct > 5  ? 'linear-gradient(90deg,var(--yellow),#d97706)' :
+                  'linear-gradient(90deg,var(--red),#dc2626)';
+
+    setBadge('fund-status', paused ? 'PAUSED' : 'Active', paused ? 'red' : 'green');
+
+    // Overview
+    setText('ov-fund0', fmt18(b0));
+  } catch(e) { log('InsuranceFund: ' + e.message, 'err'); }
+}
+
+// ── AutoCompounder ─────────────────────────────────────
+async function loadComp(comp) {
+  try {
+    const [tvl, pos, cap, minDep, pFee, kFee, paused, owner, oracle] = await Promise.all([
+      comp.totalTVL(), comp.totalPositions(), comp.maxTVLCap(),
+      comp.minDepositAmount(), comp.protocolFeeBps(), comp.keeperRewardBps(),
+      comp.paused(), comp.owner(), comp.oracle(),
+    ]);
+
+    setText('comp-tvl',    fmt18(tvl));
+    setText('comp-pos',    pos.toString());
+    setText('comp-cap',    fmt18(cap));
+    setText('comp-fee',    (Number(pFee)/100).toFixed(2) + '%');
+    setText('comp-keeper', (Number(kFee)/100).toFixed(2) + '%');
+    setText('comp-min',    fmt18(minDep));
+    setText('comp-oracle', shortAddr(oracle));
+    document.getElementById('comp-oracle').title = oracle;
+
+    const util = cap > 0n ? Number((tvl * 100n) / cap) : 0;
+    setText('comp-util', util.toFixed(1) + '%');
+    document.getElementById('comp-util-bar').style.width = Math.min(util, 100) + '%';
+
+    setBadge('comp-status', paused ? 'PAUSED' : 'Active', paused ? 'red' : 'green');
+
+    // Overview
+    setText('ov-tvl',       fmt18(tvl));
+    setText('ov-positions', pos.toString());
+  } catch(e) { log('AutoCompounder: ' + e.message, 'err'); }
+}
+
+// ── DynamicFeeHook ─────────────────────────────────────
+async function loadHook(hook) {
+  try {
+    const [baseFee, targetVol, mevThres, timelock, paused, owner, recip, oracle] = await Promise.all([
+      hook.baseFee(), hook.targetVolBps(), hook.mevThresholdBps(),
+      hook.TIMELOCK_DELAY(), hook.paused(), hook.owner(),
+      hook.feeRecipient(), hook.oracle(),
+    ]);
+
+    setText('hook-base',     baseFee + ' BPS');
+    setText('hook-vol',      targetVol.toString());
+    setText('hook-mev',      mevThres.toString());
+    setText('hook-timelock', (Number(timelock)/3600).toFixed(0) + 'h');
+    setText('hook-owner',    shortAddr(owner));
+    setText('hook-recip',    shortAddr(recip));
+    setText('hook-oracle',   shortAddr(oracle));
+    document.getElementById('hook-owner').title  = owner;
+    document.getElementById('hook-recip').title  = recip;
+    document.getElementById('hook-oracle').title = oracle;
+
+    setBadge('hook-status', paused ? 'PAUSED' : 'Active', paused ? 'red' : 'green');
+
+    // Overview
+    setText('ov-fee', baseFee + ' BPS');
+  } catch(e) { log('DynamicFeeHook: ' + e.message, 'err'); }
+}
+
+// ── Preview Fee ────────────────────────────────────────
+async function previewFee() {
+  const c = getContracts();
+  if (!c?.hook) { log('DynamicFeeHook address not set', 'err'); return; }
+  try {
+    const poolId = document.getElementById('preview-pool').value.trim();
+    const size   = document.getElementById('preview-size').value.trim();
+    const fee    = await c.hook.previewFee(poolId, BigInt(size), false);
+    document.getElementById('preview-result').value = fee + ' BPS (' + (Number(fee)/100).toFixed(2) + '%)';
+    log(`Preview fee for pool ${poolId.slice(0,10)}…: ${fee} BPS`, 'ok');
+  } catch(e) { log('previewFee: ' + e.message, 'err'); }
+}
+
+// ── Position Lookup ────────────────────────────────────
+async function lookupPosition() {
+  const c = getContracts();
+  if (!c?.comp) { log('AutoCompounder address not set', 'err'); return; }
+  const id = document.getElementById('pos-id-input').value.trim();
+  if (!id) { log('Enter a position ID', 'err'); return; }
+  try {
+    const pos = await c.comp.getPosition(id);
+    const urgency = await c.comp.getCompoundUrgency(id).catch(()=>0);
+    renderPosition(pos, urgency);
+    log(`Loaded position ${id.slice(0,12)}…`, 'ok');
+  } catch(e) { log('lookupPosition: ' + e.message, 'err'); }
+}
+
+async function lookupByOwner() {
+  const c = getContracts();
+  if (!c?.comp) { log('AutoCompounder address not set', 'err'); return; }
+  const owner = document.getElementById('pos-owner-input').value.trim();
+  if (!owner) { log('Enter an address', 'err'); return; }
+  try {
+    const ids = await c.comp.getPositionsByOwner(owner);
+    const el = document.getElementById('owner-pos-list');
+    if (ids.length === 0) {
+      el.innerHTML = '<div style="color:var(--muted);font-size:12px">No positions found for this address.</div>';
+    } else {
+      el.innerHTML = `
+        <table class="tbl">
+          <thead><tr><th>#</th><th>Position ID</th><th>Action</th></tr></thead>
+          <tbody>${ids.map((id,i) => `
+            <tr>
+              <td>${i+1}</td>
+              <td class="mono" style="font-size:11px">${id}</td>
+              <td><button class="btn btn-secondary btn-sm" onclick="fetchAndShowPos('${id}')">Details</button></td>
+            </tr>`).join('')}
+          </tbody>
+        </table>`;
+    }
+    document.getElementById('owner-positions').style.display = '';
+    log(`Found ${ids.length} position(s) for ${shortAddr(owner)}`, 'ok');
+  } catch(e) { log('lookupByOwner: ' + e.message, 'err'); }
+}
+
+async function fetchAndShowPos(id) {
+  const c = getContracts();
+  if (!c?.comp) return;
+  try {
+    const pos = await c.comp.getPosition(id);
+    const urgency = await c.comp.getCompoundUrgency(id).catch(()=>0);
+    document.getElementById('pos-id-input').value = id;
+    renderPosition(pos, urgency);
+  } catch(e) { log(e.message, 'err'); }
+}
+
+function renderPosition(pos, urgency) {
+  const statusColors = { 0:'green', 1:'yellow', 2:'red' };
+  const urgencyColors = { 0:'green', 1:'green', 2:'yellow', 3:'yellow', 4:'red' };
+
+  setText('pd-owner',   pos.owner);
+  document.getElementById('pd-status').innerHTML =
+    `<span class="badge ${statusColors[pos.status] || 'yellow'}">${STATUS[pos.status] || pos.status}
+    — ${URGENCY[urgency] || urgency}</span>`;
+  setText('pd-risk',    RISK[pos.riskProfile] || pos.riskProfile);
+  setText('pd-cycles',  pos.compoundCount.toString());
+  setText('pd-cap0',    fmt18(pos.initialCapital0));
+  setText('pd-cap1',    fmt18(pos.initialCapital1));
+  setText('pd-fees0',   fmt18(pos.totalFees0));
+  setText('pd-il0',     fmt18(pos.totalIL0));
+  setText('pd-ticks',   `[${pos.tickLower}, ${pos.tickUpper}]`);
+  setText('pd-lastcomp', ts(pos.lastCompound));
+  document.getElementById('position-detail').style.display = '';
+}
+
+// ── Helpers ────────────────────────────────────────────
+function fmt18(n) {
+  const v = Number(n) / 1e18;
+  if (v === 0) return '0';
+  if (v < 0.0001) return v.toExponential(2);
+  if (v < 1) return v.toFixed(6);
+  if (v < 1000) return v.toFixed(4);
+  return v.toLocaleString('en', {maximumFractionDigits:2});
+}
+function shortAddr(a) {
+  if (!a || a === '0x0000000000000000000000000000000000000000') return 'Not set';
+  return a.slice(0,6) + '…' + a.slice(-4);
+}
+function setText(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+function setBadge(id, text, color) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.className = `badge ${color}`;
+  el.innerHTML = `<span class="blink"></span>${text}`;
+}
+function ts(n) {
+  if (!n || n === 0n) return '—';
+  return new Date(Number(n) * 1000).toLocaleString();
+}
+
+// ── Demo addresses — auto-filled from last Anvil deploy ─
+function fillDemo() {
+  document.getElementById('addr-fund').value = '0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6';
+  document.getElementById('addr-comp').value = '0x610178dA211FEF7D417bC0e6FeD39F05609AD788';
+  document.getElementById('addr-hook').value = '0x8A791620dd6260079BF849Dc5567aDC3F2FdC318';
+  log('Demo addresses loaded (Anvil local deploy)', 'ok');
+}
+
+// Copy address on click
+document.addEventListener('click', e => {
+  if (e.target.classList.contains('addr') && e.target.title) {
+    navigator.clipboard?.writeText(e.target.title);
+    log('Copied: ' + e.target.title, 'info');
+  }
+});
+</script>
+</body>
+</html>
