@@ -24,6 +24,8 @@ import {XenorizeMath} from "../../src/libraries/XenorizeMath.sol";
 import {XenorizeInsuranceFund} from "../../src/core/InsuranceFund.sol";
 import {XenorizeDynamicFeeHook} from "../../src/hooks/DynamicFeeHook.sol";
 import {InsuranceClaim, RiskProfile} from "../../src/types/XenorizeTypes.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
 // ─── MOCK CONTRACTS ──────────────────────────────────────────────
 
@@ -271,18 +273,18 @@ contract TestDynamicFeeHook is Test {
     function setUp() public {
         oracle = new MockOracle();
         hook   = new XenorizeDynamicFeeHook(
-            POOL_MGR, OWNER, FEE_RECV, address(oracle), address(0)
+            IPoolManager(POOL_MGR), OWNER, FEE_RECV, address(0), address(oracle), address(0)
         );
     }
 
     function test_Constructor_SetsImmutables() public view {
-        assertEq(hook.poolManager(),  POOL_MGR);
+        assertEq(address(hook.poolManager()),  POOL_MGR);
         assertEq(hook.owner(),        OWNER);
         assertEq(hook.feeRecipient(), FEE_RECV);
     }
 
     function test_GetCurrentFee_ReturnsZeroForUninitialized() public view {
-        bytes32 poolId = keccak256("ETH-USDC");
+        PoolId poolId = PoolId.wrap(keccak256("ETH-USDC"));
         assertEq(hook.getCurrentFee(poolId), 0);
     }
 

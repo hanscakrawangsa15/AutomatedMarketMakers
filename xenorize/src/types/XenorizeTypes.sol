@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
+
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 
 enum RiskProfile { Conservative, Balanced, Aggressive }
 
@@ -9,10 +11,11 @@ enum CompoundUrgency { None, Low, Medium, High, Immediate }
 
 struct Position {
     address owner;
-    bytes32 poolId;
+    bytes32 poolId;       // keccak hash of PoolKey — used as mapping key
+    PoolKey poolKey;      // full V4 PoolKey for PoolManager calls
     int24   tickLower;
     int24   tickUpper;
-    uint128 liquidity;
+    uint128 liquidity;    // actual V4 liquidity units
     uint256 depositTime;
     uint256 lastCompound;
     uint256 compoundCount;
@@ -23,6 +26,8 @@ struct Position {
     uint256 totalIL0;
     RiskProfile    riskProfile;
     PositionStatus status;
+    bool    aiManaged;    // true → keeper/AI controls range rebalancing
+                          // false → LP keeps manual range, AI only compounds fees
 }
 
 struct CompoundConfig {
@@ -73,6 +78,7 @@ struct FeeState {
     uint256 mevPremium;
 }
 
+// ─── Errors ───────────────────────────────────────────────────────
 error Xenorize__ZeroAmount();
 error Xenorize__InvalidRange(int24 lower, int24 upper);
 error Xenorize__PositionNotActive(bytes32 positionId);
