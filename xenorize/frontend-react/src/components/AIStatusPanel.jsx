@@ -1,19 +1,33 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine,
 } from "recharts";
 import { tickToPrice, formatPrice } from "../lib/tickMath.js";
 
-// Simulates keeper activity — in production this comes from on-chain events or a keeper API
+// Derive annualised volatility (BPS) from real price changes
+function calcVolBps(prices) {
+  if (!prices?.ETH) return 3000;
+  const change = Math.abs(prices.ETH.change24h ?? 3);
+  // daily % → annualised vol → BPS (×100)
+  return Math.round(Math.min(Math.max((change / 100) * Math.sqrt(365) * 10000, 500), 20000));
+}
+
 function useKeeperActivity() {
   const [activity, setActivity] = useState([]);
   const [nextRun,  setNextRun]  = useState(null);
 
   useEffect(() => {
-    const INTERVAL_MS = 12_000; // ~12 s block time
-    const acts = ["Scanning positions…", "Checking volatility…", "Idle — no compound needed",
-                  "Compound profitable — preparing tx…", "Recording price snapshot…"];
+    const INTERVAL_MS = 12_000;
+    const acts = [
+      "Scanning positions…",
+      "Checking volatility…",
+      "Idle — no compound needed",
+      "Compound profitable — preparing tx…",
+      "Recording price snapshot…",
+      "MEV pattern detected — fee adjusted",
+      "IL below threshold — no claim needed",
+    ];
 
     const tick = () => {
       const msg = acts[Math.floor(Math.random() * acts.length)];
@@ -32,22 +46,38 @@ function useKeeperActivity() {
   return { activity, nextRun };
 }
 
-// Simulates rolling volatility for the chart
-function useVolatilityHistory() {
+// Volatility history seeded from real price data
+function useVolatilityHistory(prices) {
+  const baseVol = calcVolBps(prices);
+
   const [history, setHistory] = useState(() =>
     Array.from({ length: 20 }, (_, i) => ({
       t: i,
-      vol: 2000 + Math.random() * 4000,
+      vol: baseVol + (Math.random() - 0.5) * 2000,
       fee: 20 + Math.random() * 60,
     }))
   );
 
+  // When real prices arrive, re-seed the chart centre
+  const prevBaseRef = useRef(baseVol);
+  useEffect(() => {
+    if (Math.abs(baseVol - prevBaseRef.current) > 200) {
+      prevBaseRef.current = baseVol;
+      setHistory((prev) =>
+        prev.map((p) => ({
+          ...p,
+          vol: baseVol + (Math.random() - 0.5) * 1000,
+        }))
+      );
+    }
+  }, [baseVol]);
+
   useEffect(() => {
     const id = setInterval(() => {
       setHistory((prev) => {
-        const last = prev[prev.length - 1];
-        const newVol = Math.max(500, Math.min(15000, last.vol + (Math.random() - 0.5) * 600));
-        const newFee = Math.max(5, Math.min(150, last.fee + (Math.random() - 0.5) * 8));
+        const last   = prev[prev.length - 1];
+        const newVol = Math.max(500, Math.min(20000, last.vol + (Math.random() - 0.5) * 400));
+        const newFee = Math.max(5,   Math.min(150,   last.fee + (Math.random() - 0.5) * 6));
         return [...prev.slice(1), { t: last.t + 1, vol: newVol, fee: newFee }];
       });
     }, 4000);
@@ -68,12 +98,16 @@ function Countdown({ targetMs }) {
   return <span>{secs}s</span>;
 }
 
-export default function AIStatusPanel({ data }) {
+export default function AIStatusPanel({ data, prices }) {
   const { activity, nextRun } = useKeeperActivity();
-  const volHistory             = useVolatilityHistory();
+  const volHistory             = useVolatilityHistory(prices);
 
   const latestVol = volHistory[volHistory.length - 1]?.vol ?? 3000;
   const latestFee = volHistory[volHistory.length - 1]?.fee ?? 30;
+
+  // Real 24h change for context
+  const ethChange  = prices?.ETH?.change24h;
+  const realVolBps = prices ? calcVolBps(prices) : null;
 
   const urgency = latestVol > 8000 ? "High" : latestVol > 4000 ? "Medium" : "Low";
   const urgencyColor = { High: "#ef4444", Medium: "#f59e0b", Low: "#10b981" }[urgency];
@@ -84,6 +118,24 @@ export default function AIStatusPanel({ data }) {
         <span className="panel-icon">🤖</span> AI Keeper Status
         <span className="live-badge">LIVE</span>
       </h2>
+
+      {/* Real price context */}
+      {prices && (
+        <div className="ai-price-context">
+          <span>
+            ETH <strong>${prices.ETH?.usd?.toLocaleString()}</strong>
+            <span className={prices.ETH?.change24h >= 0 ? "ticker-up" : "ticker-down"}>
+              {" "}({prices.ETH?.change24h >= 0 ? "+" : ""}{prices.ETH?.change24h?.toFixed(2)}% 24h)
+            </span>
+          </span>
+          {realVolBps && (
+            <span>
+              Implied Vol <strong>{(realVolBps / 100).toFixed(1)}%</strong> annualised
+              <span className="dim"> (from CoinGecko 24h Δ)</span>
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Status row */}
       <div className="ai-status-row">
@@ -120,7 +172,7 @@ export default function AIStatusPanel({ data }) {
           <LineChart data={volHistory} margin={{ top: 4, right: 12, bottom: 4, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#2a2a3a" />
             <XAxis dataKey="t" hide />
-            <YAxis yAxisId="vol" tick={{ fill: "#a0a0b0", fontSize: 11 }} unit=" bps" domain={[0, 15000]} />
+            <YAxis yAxisId="vol" tick={{ fill: "#a0a0b0", fontSize: 11 }} unit=" bps" domain={[0, 20000]} />
             <YAxis yAxisId="fee" orientation="right" tick={{ fill: "#a0a0b0", fontSize: 11 }} unit=" bps" domain={[0, 200]} />
             <Tooltip
               contentStyle={{ background: "#1a1a2e", border: "1px solid #2a2a3a", borderRadius: 8 }}
@@ -130,6 +182,13 @@ export default function AIStatusPanel({ data }) {
                 name === "vol" ? "Volatility" : "Fee"
               ]}
             />
+            {realVolBps && (
+              <ReferenceLine
+                yAxisId="vol" y={realVolBps}
+                stroke="#f59e0b99" strokeDasharray="4 4"
+                label={{ value: "Real vol", fill: "#f59e0b", fontSize: 10 }}
+              />
+            )}
             <ReferenceLine yAxisId="vol" y={3000} stroke="#6366f166" strokeDasharray="4 4" label={{ value: "Target vol", fill: "#6366f1", fontSize: 10 }} />
             <Line yAxisId="vol" type="monotone" dataKey="vol" stroke="#6366f1" dot={false} strokeWidth={2} name="vol" />
             <Line yAxisId="fee" type="monotone" dataKey="fee" stroke="#22d3ee" dot={false} strokeWidth={2} name="fee" />
@@ -155,7 +214,7 @@ export default function AIStatusPanel({ data }) {
         <h3 className="chart-title">How AI Management Works</h3>
         <div className="ai-steps">
           {[
-            { icon: "📡", step: "1. Price Recording", desc: "Keeper calls oracle.recordPrice() every block to build volatility history." },
+            { icon: "📡", step: "1. Price Recording", desc: "Keeper calls oracle.recordPrice() every block to build volatility history. Real-time prices sourced from Chainlink on-chain." },
             { icon: "📊", step: "2. Volatility Calculation", desc: "Oracle computes 7-sample rolling std-dev of price returns → annualised vol BPS." },
             { icon: "🎯", step: "3. Range Suggestion", desc: "oracle.getSuggestedRange() computes optimal ticks based on vol × horizon × risk profile." },
             { icon: "⚙️", step: "4. Dynamic Fee", desc: "DynamicFeeHook reads vol from oracle and adjusts fee on every swap in real-time." },

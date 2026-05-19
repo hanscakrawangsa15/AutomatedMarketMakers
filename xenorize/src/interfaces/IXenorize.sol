@@ -22,6 +22,7 @@ import {
     InsuranceClaim,
     InsuranceFundState,
     Position,
+    PositionSnapshot,
     CompoundConfig,
     CompoundResult,
     CompoundUrgency
@@ -45,16 +46,26 @@ interface IXenorizeOracle {
 interface IInsuranceFund {
     function submitClaim(InsuranceClaim calldata claim)
         external returns (uint256 compensated0, uint256 compensated1);
-    function deposit(uint256 amount0, uint256 amount1) external;
+    /// @notice Deposit protocol fee income into the vault (no shares minted — increases NAV)
+    function depositFee(uint256 amount) external;
     function updateTVL(uint256 newTVL) external;
     function getFundState() external view returns (InsuranceFundState memory);
-    function getMaxClaim(bytes32 positionId, uint256 ilAmount0, uint256 ilAmount1, uint256 loyaltyScore)
+    function getMaxClaim(bytes32 positionId, uint256 ilAmountUSD, uint256 ilAmount1, uint256 loyaltyScore)
         external view returns (uint256 maxToken0, uint256 maxToken1);
+    /// @notice Returns the primary asset address (ERC-4626 underlying)
+    function asset() external view returns (address);
 
     event ClaimPaid(bytes32 indexed positionId, address indexed recipient, uint256 amount0, uint256 amount1);
-    event FundDeposited(address indexed source, uint256 amount0, uint256 amount1);
+    event FeeDeposited(address indexed source, uint256 amount);
     event ClaimsSuspended(string reason);
     event ClaimsResumed();
+}
+
+interface IILShieldHook {
+    event SnapshotCreated(bytes32 indexed snapshotKey, address indexed lp, uint256 price0, uint256 price1);
+    event SnapshotUpdated(bytes32 indexed snapshotKey, address indexed lp, uint256 newPrice0, uint256 newPrice1);
+    event ILCompensationTriggered(bytes32 indexed snapshotKey, address indexed lp, uint256 ilAmount0, uint256 compensated);
+    event ILSkipped(bytes32 indexed snapshotKey, string reason);
 }
 
 // ─── Chainlink Aggregator ─────────────────────────────────────────

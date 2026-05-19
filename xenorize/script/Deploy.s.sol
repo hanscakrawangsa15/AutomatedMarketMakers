@@ -60,7 +60,8 @@ contract XenorizeDeploy is Script {
 
         // ── 2. InsuranceFund ──────────────────────────────────────
         console2.log("Deploying InsuranceFund...");
-        insuranceFund = new XenorizeInsuranceFund(owner, deployer, t0, t1);
+        // ERC-4626 vault: primary asset = t0 (USD-pegged), owner = deployer
+        insuranceFund = new XenorizeInsuranceFund(t0, deployer, "Xenorize Insurance", "xINS");
         console2.log("  InsuranceFund :", address(insuranceFund));
 
         // ── 3. Chainlink Oracle ───────────────────────────────────

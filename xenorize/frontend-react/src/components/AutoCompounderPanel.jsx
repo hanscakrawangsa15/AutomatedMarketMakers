@@ -1,18 +1,38 @@
 import React from "react";
 import {
-  RadialBarChart, RadialBar, Tooltip, ResponsiveContainer, Legend,
+  RadialBarChart, RadialBar, Tooltip, ResponsiveContainer,
 } from "recharts";
 import StatCard from "./StatCard.jsx";
+
+// Format large numbers compactly: 2694237 → $2.69M
+function fmtCompact(raw) {
+  const n = parseFloat(raw);
+  if (isNaN(n)) return "—";
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000)     return `$${(n / 1_000).toFixed(1)}K`;
+  return `$${n.toFixed(2)}`;
+}
+
+function fmtUnits(raw) {
+  const n = parseFloat(raw);
+  if (isNaN(n)) return "—";
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}K`;
+  return n.toFixed(4);
+}
 
 export default function AutoCompounderPanel({ data }) {
   if (!data) return <PanelSkeleton />;
 
-  const tvlPct = data.maxTVLCap > 0
-    ? Math.min(100, (parseFloat(data.tvl) / parseFloat(data.maxTVLCap)) * 100)
+  const tvlNum    = parseFloat(data.tvl) || 0;
+  const maxTVLNum = parseFloat(data.maxTVLCap) || 0;
+
+  const tvlPct = maxTVLNum > 0
+    ? Math.min(100, (tvlNum / maxTVLNum) * 100)
     : 0;
 
   const radialData = [
-    { name: "TVL Cap", value: 100, fill: "#2a2a3a" },
+    { name: "TVL Cap", value: 100,    fill: "#2a2a3a" },
     { name: "Used",    value: tvlPct, fill: "#6366f1" },
   ];
 
@@ -23,12 +43,12 @@ export default function AutoCompounderPanel({ data }) {
       </h2>
 
       <div className="stat-grid">
-        <StatCard icon="📊" title="Total TVL"        value={`${data.tvl}`}              sub="WAD units" accent="green" />
-        <StatCard icon="🔖" title="Open Positions"   value={data.positions.toString()}  sub="active" />
-        <StatCard icon="🏦" title="Protocol Fee"     value={`${(data.protocolFeeBps / 100).toFixed(2)}%`} sub="of compound yield" />
-        <StatCard icon="🤖" title="Keeper Reward"    value={`${(data.keeperRewardBps / 100).toFixed(2)}%`} sub="per compound tx" accent="orange" />
-        <StatCard icon="📉" title="Min Deposit"      value={`${data.minDepositAmount}`} sub="WAD units" />
-        <StatCard icon="🚧" title="Max TVL Cap"      value={`${data.maxTVLCap}`}        sub="WAD units" />
+        <StatCard icon="📊" title="Total TVL"      value={fmtCompact(data.tvl)}          sub="WAD units" accent="green" />
+        <StatCard icon="🔖" title="Open Positions" value={data.positions.toString()}      sub="active" />
+        <StatCard icon="🏦" title="Protocol Fee"   value={`${(data.protocolFeeBps / 100).toFixed(2)}%`} sub="of compound yield" />
+        <StatCard icon="🤖" title="Keeper Reward"  value={`${(data.keeperRewardBps / 100).toFixed(2)}%`} sub="per compound tx" accent="orange" />
+        <StatCard icon="📉" title="Min Deposit"    value={fmtUnits(data.minDepositAmount)} sub="WAD units" />
+        <StatCard icon="🚧" title="Max TVL Cap"    value={fmtCompact(data.maxTVLCap)}    sub="WAD units" />
       </div>
 
       <div className="chart-row">

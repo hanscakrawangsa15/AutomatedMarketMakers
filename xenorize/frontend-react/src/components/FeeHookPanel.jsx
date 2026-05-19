@@ -11,6 +11,14 @@ function feePct(fee) {
   return fee > 0 ? `${(fee / 10000).toFixed(4)}%` : "—";
 }
 
+function fmtUSD(v) {
+  const n = parseFloat(v);
+  if (isNaN(n)) return "—";
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000)     return `$${(n / 1_000).toFixed(1)}K`;
+  return `$${n.toFixed(2)}`;
+}
+
 export default function FeeHookPanel({ data }) {
   if (!data) return <PanelSkeleton />;
 
@@ -29,9 +37,9 @@ export default function FeeHookPanel({ data }) {
       </h2>
 
       <div className="stat-grid">
-        <StatCard icon="🎯" title="Base Fee"         value={feePct(data.baseFee)}          sub="default fee tier" />
-        <StatCard icon="📈" title="Target Volatility" value={`${(data.targetVolBps / 100).toFixed(1)}%`} sub="annualised BPS" />
-        <StatCard icon="🤖" title="MEV Threshold"    value={`${(data.mevThresholdBps / 100).toFixed(2)}%`} sub="of pool TVL" accent="orange" />
+        <StatCard icon="🎯" title="Base Fee"          value={feePct(data.baseFee)}                           sub="default fee tier" />
+        <StatCard icon="📈" title="Target Volatility" value={`${(data.targetVolBps / 100).toFixed(1)}%`}    sub="annualised BPS" />
+        <StatCard icon="🤖" title="MEV Threshold"     value={`${(data.mevThresholdBps / 100).toFixed(2)}%`} sub="of pool TVL" accent="orange" />
         <StatCard icon={data.paused ? "🔴" : "🟢"} title="Status" value={data.paused ? "Paused" : "Active"} accent={data.paused ? "red" : "green"} />
       </div>
 
@@ -64,20 +72,34 @@ export default function FeeHookPanel({ data }) {
           <thead>
             <tr>
               <th>Pool</th>
+              <th>Price (USD)</th>
+              <th>24h Δ</th>
               <th>Current Fee</th>
               <th>TVL (USD)</th>
               <th>Pool ID</th>
             </tr>
           </thead>
           <tbody>
-            {(data.pools ?? []).map((p) => (
-              <tr key={p.id}>
-                <td className="pool-name">{p.name}</td>
-                <td className="fee-cell">{feePct(p.fee)}</td>
-                <td>${parseFloat(p.tvlUSD).toLocaleString()}</td>
-                <td className="addr-cell">{p.id.slice(0, 10)}…</td>
-              </tr>
-            ))}
+            {(data.pools ?? []).map((p) => {
+              const change = p.change24h ?? 0;
+              const up     = change >= 0;
+              return (
+                <tr key={p.id}>
+                  <td className="pool-name">{p.name}</td>
+                  <td className="price-cell">
+                    {p.priceUSD ? `$${p.priceUSD.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : "—"}
+                  </td>
+                  <td className={up ? "ticker-up" : "ticker-down"}>
+                    {p.change24h != null
+                      ? `${up ? "+" : ""}${change.toFixed(2)}%`
+                      : "—"}
+                  </td>
+                  <td className="fee-cell">{feePct(p.fee)}</td>
+                  <td>{fmtUSD(p.tvlUSD)}</td>
+                  <td className="addr-cell">{p.id.slice(0, 10)}…</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

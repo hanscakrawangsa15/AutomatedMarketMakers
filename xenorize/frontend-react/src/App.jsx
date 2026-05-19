@@ -7,9 +7,12 @@ import AutoCompounderPanel from "./components/AutoCompounderPanel.jsx";
 import OpenPositionPanel   from "./components/OpenPositionPanel.jsx";
 import PositionsList       from "./components/PositionsList.jsx";
 import AIStatusPanel       from "./components/AIStatusPanel.jsx";
+import PriceTicker         from "./components/PriceTicker.jsx";
+import ILShieldPanel       from "./components/ILShieldPanel.jsx";
 import { generateDemoData } from "./components/DemoMode.jsx";
 import { useProvider }      from "./lib/useProvider.js";
 import { useContractData }  from "./lib/useContractData.js";
+import { usePrices }        from "./lib/usePrices.js";
 
 const TABS = ["Overview", "Open Position", "My Positions", "AI Status"];
 
@@ -19,16 +22,26 @@ export default function App() {
 
   const { data: liveData, loading, error: dataErr, refresh } = useContractData(provider);
 
-  const [demo, setDemo]       = useState(generateDemoData());
+  // Always-on real price feed — Binance only
+  const { prices, loading: priceLoading, error: priceError, lastUpdated } = usePrices();
+
+  const [demo, setDemo]       = useState(() => generateDemoData(null));
   const [useDemo, setUseDemo] = useState(true);
   const [tab, setTab]         = useState("Overview");
 
+  // Regenerate demo data anchored to real prices whenever prices update
   useEffect(() => {
     if (useDemo) {
-      const id = setInterval(() => setDemo(generateDemoData()), 8000);
-      return () => clearInterval(id);
+      setDemo(generateDemoData(prices));
     }
-  }, [useDemo]);
+  }, [prices, useDemo]);
+
+  // Also tick demo data every 15s (between price updates)
+  useEffect(() => {
+    if (!useDemo) return;
+    const id = setInterval(() => setDemo(generateDemoData(prices)), 15_000);
+    return () => clearInterval(id);
+  }, [useDemo, prices]);
 
   useEffect(() => {
     if (provider) setUseDemo(false);
@@ -44,12 +57,21 @@ export default function App() {
         onMetaMask={connectMetaMask} onAnvil={connectAnvil} onDisconnect={disconnect}
       />
 
+      {/* Always-on live price ticker — Binance */}
+      <PriceTicker
+        prices={prices}
+        loading={priceLoading}
+        error={priceError}
+        lastUpdated={lastUpdated}
+      />
+
       {(connErr || dataErr) && (
         <div className="error-bar">⚠️ {connErr || dataErr}</div>
       )}
       {useDemo && (
         <div className="demo-bar">
-          🎭 Demo mode — simulated data. Connect MetaMask or Anvil to read live chain state.
+          🎭 Demo mode — on-chain data simulated. Prices above are <strong>live from CoinGecko</strong>.
+          Connect MetaMask or Anvil to read live chain state.
         </div>
       )}
 
@@ -78,9 +100,11 @@ export default function App() {
             {/* Summary tiles */}
             <div className="summary-row">
               {[
-                { label: "Total TVL", value: `${parseFloat(data?.compounder?.tvl||0).toLocaleString()} WAD`, icon: "💹" },
+                { label: "Total TVL", value: `$${parseFloat(data?.compounder?.tvl||0).toLocaleString("en-US", { maximumFractionDigits: 0 })}`, icon: "💹" },
                 { label: "Open Positions", value: data?.compounder?.positions ?? "—", icon: "🔖" },
-                { label: "Insurance Balance", value: `${parseFloat(data?.insurance?.balance0||0).toLocaleString()} T0`, icon: "🛡️" },
+                { label: "Vault Assets", value: `$${parseFloat(data?.insurance?.totalAssets||0).toLocaleString("en-US", { maximumFractionDigits: 0 })}`, icon: "🛡️" },
+                { label: "IL Compensated", value: `$${parseFloat(data?.insurance?.totalPaidOut||0).toLocaleString("en-US", { maximumFractionDigits: 0 })}`, icon: "⚔️" },
+                { label: "Active Snapshots", value: data?.ilShield?.activeSnapshots ?? "—", icon: "📸" },
                 { label: "Base Fee", value: `${((data?.hook?.baseFee ?? 30)/10000).toFixed(4)}%`, icon: "⚙️" },
                 { label: "Hook Status", value: data?.hook?.paused ? "⛔ Paused" : "✅ Active", icon: "🔗" },
               ].map(({ label, value, icon }) => (
@@ -101,6 +125,8 @@ export default function App() {
               <FeeHookPanel       data={data?.hook}      />
             </div>
 
+            <ILShieldPanel data={data?.ilShield} />
+
             <AutoCompounderPanel data={data?.compounder} />
 
             <div className="footer-bar">
@@ -110,7 +136,9 @@ export default function App() {
                 </button>
               )}
               <span className="footer-note">
-                {useDemo ? "Demo data refreshes every 8 s" : "Live data — auto-refreshes every 15 s"}
+                {useDemo
+                  ? `Demo on-chain data • Prices live from CoinGecko (updated ${lastUpdated?.toLocaleTimeString() ?? "…"})`
+                  : "Live chain data — auto-refreshes every 15 s"}
               </span>
             </div>
           </>
@@ -118,7 +146,7 @@ export default function App() {
 
         {/* ── Open Position ──────────────────────────────────── */}
         {tab === "Open Position" && (
-          <OpenPositionPanel provider={provider} account={account} />
+          <OpenPositionPanel provider={provider} account={account} prices={prices} />
         )}
 
         {/* ── My Positions ───────────────────────────────────── */}
@@ -128,7 +156,7 @@ export default function App() {
 
         {/* ── AI Status ──────────────────────────────────────── */}
         {tab === "AI Status" && (
-          <AIStatusPanel data={data} />
+          <AIStatusPanel data={data} prices={prices} />
         )}
 
       </main>

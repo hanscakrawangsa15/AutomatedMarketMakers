@@ -26,8 +26,9 @@ struct Position {
     uint256 totalIL0;
     RiskProfile    riskProfile;
     PositionStatus status;
-    bool    aiManaged;    // true → keeper/AI controls range rebalancing
-                          // false → LP keeps manual range, AI only compounds fees
+    bool    aiManaged;       // true → keeper/AI controls range rebalancing
+                             // false → LP keeps manual range, AI only compounds fees
+    uint256 entryPrice0USD;  // oracle price of token0 at deposit time (18-dec WAD)
 }
 
 struct CompoundConfig {
@@ -63,10 +64,10 @@ struct InsuranceFundState {
 }
 
 struct InsuranceClaim {
-    bytes32 positionId;
-    uint256 ilAmount0;
-    uint256 ilAmount1;
-    uint256 loyaltyScore;
+    bytes32 positionId;   // unique ID for lifetime-cap tracking
+    address recipient;    // actual LP address that receives compensation
+    uint256 ilAmountUSD;  // IL denominated in 18-decimal USD (fund pays in primary asset)
+    uint256 loyaltyScore; // 0–10_000 BPS (100% after 90 days)
     bytes   proof;
 }
 
@@ -76,6 +77,17 @@ struct FeeState {
     uint256 volatilityIndex;
     uint256 lastFeeUpdate;
     uint256 mevPremium;
+}
+
+// Snapshot recorded when LP adds liquidity — used to compute IL at exit
+struct PositionSnapshot {
+    uint256 amount0;       // cumulative token0 deposited (absolute)
+    uint256 amount1;       // cumulative token1 deposited (absolute)
+    uint256 price0USD;     // liquidity-weighted entry price token0 (18 dec)
+    uint256 price1USD;     // liquidity-weighted entry price token1 (18 dec)
+    uint256 depositTime;   // first deposit timestamp
+    uint128 liquidity;     // current v4 liquidity tracked
+    bool    exists;
 }
 
 // ─── Errors ───────────────────────────────────────────────────────

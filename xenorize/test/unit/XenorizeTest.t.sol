@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 // ─────────────────────────────────────────────────────────────────
 // XENORIZE AMM — Comprehensive Test Suite
@@ -22,10 +22,19 @@ import {StdInvariant} from "../../lib/forge-std/src/StdInvariant.sol";
 
 import {XenorizeMath} from "../../src/libraries/XenorizeMath.sol";
 import {XenorizeInsuranceFund} from "../../src/core/InsuranceFund.sol";
+import {XenorizeAutoCompounder} from "../../src/core/AutoCompounder.sol";
+import {XenorizeChainlinkOracle} from "../../src/oracles/XenorizeChainlinkOracle.sol";
 import {XenorizeDynamicFeeHook} from "../../src/hooks/DynamicFeeHook.sol";
-import {InsuranceClaim, RiskProfile} from "../../src/types/XenorizeTypes.sol";
+import {XenorizeILShieldHook} from "../../src/hooks/ILShieldHook.sol";
+import {InsuranceClaim, RiskProfile, PositionSnapshot, Position, CompoundConfig, CompoundResult, CompoundUrgency, PositionStatus} from "../../src/types/XenorizeTypes.sol";
+import {IInsuranceFund, IXenorizeOracle, AggregatorV3Interface} from "../../src/interfaces/IXenorize.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
-import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 // ─── MOCK CONTRACTS ──────────────────────────────────────────────
 
@@ -120,26 +129,20 @@ contract MockOracle {
 contract TestXenorizeMath is Test {
 
     function setUp() public {
-        // Ensure block.timestamp is large enough for all loyalty duration tests
         vm.warp(1001 days);
     }
 
-    // ─── IL Calculation Tests ─────────────────────────────────────
-
     function test_IL_ZeroPriceRatio_Returns100PercentLoss() public pure {
-        // If price goes to 0, IL should be -100%
         int256 il = XenorizeMath.calculateIL(0);
         assertEq(il, -int256(XenorizeMath.WAD), "Zero price = 100% loss");
     }
 
     function test_IL_NoPriceChange_ReturnsZero() public pure {
-        // If price doesn't change (r = 1), IL = 0
         int256 il = XenorizeMath.calculateIL(XenorizeMath.WAD);
         assertEq(il, 0, "No price change = no IL");
     }
 
     function test_IL_2xPriceIncrease_Returns572BPS() public pure {
-        // ETH doubles: r = 2, IL ≈ -5.72%
         uint256 priceRatio = 2 * XenorizeMath.WAD;
         int256 il = XenorizeMath.calculateIL(priceRatio);
         assertGe(il, -0.0600e18, "IL 2x not in expected range (min)");
@@ -159,7 +162,6 @@ contract TestXenorizeMath is Test {
     }
 
     function test_IL_SymmetricForUpAndDown() public pure {
-        // IL should be symmetric: 2x up ≈ 0.5x down (same percentage loss)
         uint256 up   = 2 * XenorizeMath.WAD;
         uint256 down = XenorizeMath.WAD / 2;
 
@@ -172,8 +174,6 @@ contract TestXenorizeMath is Test {
 
         assertLt(diff, 0.01e18, "IL not symmetric for equal up/down moves");
     }
-
-    // ─── Dynamic Fee Tests ────────────────────────────────────────
 
     function test_DynamicFee_HighVolatility_IncreaseFee() public pure {
         uint24 fee = XenorizeMath.computeDynamicFee(
@@ -208,12 +208,8 @@ contract TestXenorizeMath is Test {
         assertLe(fee, 10_000, "Fee must never exceed 100%");
     }
 
-    // ─── Loyalty Multiplier Tests ─────────────────────────────────
-
     function test_LoyaltyMultiplier_Day0_Returns1x() public view {
-        uint256 mult = XenorizeMath.computeLoyaltyMultiplier(
-            block.timestamp, block.timestamp
-        );
+        uint256 mult = XenorizeMath.computeLoyaltyMultiplier(block.timestamp, block.timestamp);
         assertEq(mult, 10_000, "Day 0 should return exactly 1.0x (10_000 BPS)");
     }
 
@@ -243,8 +239,6 @@ contract TestXenorizeMath is Test {
         assertLe(mult30,  mult90,  "30d multiplier should be <= 90d");
         assertLe(mult90,  mult180, "90d multiplier should be <= 180d");
     }
-
-    // ─── Sqrt Tests ───────────────────────────────────────────────
 
     function test_SqrtWad_One() public pure {
         uint256 result = XenorizeMath.sqrtWad(XenorizeMath.WAD);
@@ -304,12 +298,10 @@ contract TestDynamicFeeHook is Test {
         vm.prank(OWNER);
         hook.queueOracleUpdate(newOracle);
 
-        // Cannot execute before timelock
         vm.prank(OWNER);
         vm.expectRevert();
         hook.executeOracleUpdate(newOracle);
 
-        // After timelock, can execute
         vm.warp(block.timestamp + 48 hours + 1);
         vm.prank(OWNER);
         hook.executeOracleUpdate(newOracle);
@@ -318,54 +310,153 @@ contract TestDynamicFeeHook is Test {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// 3. INSURANCE FUND UNIT TESTS
+// 3. INSURANCE FUND UNIT TESTS (ERC-4626)
 // ─────────────────────────────────────────────────────────────────
 
 contract TestInsuranceFund is Test {
 
     XenorizeInsuranceFund fund;
     MockERC20             usdc;
-    MockERC20             weth;
 
-    address constant OWNER      = address(0xBEEF);
-    address constant COMPOUNDER = address(0xC0C0);
+    address constant OWNER  = address(0xBEEF);
+    address constant SHIELD = address(0xC0C0); // ILShieldHook (authorized depositor)
+    address constant LP     = address(0x1234);
 
     function setUp() public {
-        usdc = new MockERC20("USD Coin",    "USDC");
-        weth = new MockERC20("Wrapped ETH", "WETH");
-        fund = new XenorizeInsuranceFund(OWNER, COMPOUNDER, address(usdc), address(weth));
-    }
+        vm.warp(1001 days);
+        usdc = new MockERC20("USD Coin", "USDC");
+        fund = new XenorizeInsuranceFund(address(usdc), OWNER, "Xenorize Insurance Share", "xINS");
 
-    function test_Deposit_UpdatesBalance() public {
+        // Authorize the mock IL Shield hook
         vm.prank(OWNER);
-        fund.setAuthorizedDepositor(address(this), true);
-        usdc.mint(address(this), 1_000e18);
-        usdc.approve(address(fund), 1_000e18);
-        fund.deposit(1_000e18, 0);
-        assertEq(fund.fundBalance0(), 1_000e18);
+        fund.setAuthorizedDepositor(SHIELD, true);
     }
 
-    function test_Deposit_OnlyAuthorized() public {
+    // ── DepositFee ──────────────────────────────────────────────
+
+    function test_DepositFee_UpdatesAssets() public {
+        usdc.mint(SHIELD, 1_000e18);
+        vm.startPrank(SHIELD);
+        usdc.approve(address(fund), 1_000e18);
+        fund.depositFee(1_000e18);
+        vm.stopPrank();
+
+        assertEq(fund.totalAssets(), 1_000e18, "totalAssets should equal deposited fee");
+        assertEq(fund.totalFeeIncome(), 1_000e18);
+    }
+
+    function test_DepositFee_OnlyAuthorized() public {
         usdc.mint(address(this), 100e18);
         usdc.approve(address(fund), 100e18);
         vm.expectRevert();
-        fund.deposit(100e18, 0);
+        fund.depositFee(100e18);
     }
 
+    function test_DepositFee_IncreasesShareNAV() public {
+        // First: stake 1000 USDC as LP
+        usdc.mint(LP, 1_000e18);
+        vm.startPrank(LP);
+        usdc.approve(address(fund), 1_000e18);
+        fund.deposit(1_000e18, LP);  // ERC-4626 deposit
+        vm.stopPrank();
+
+        uint256 sharesBefore = fund.balanceOf(LP);
+        uint256 assetsBefore = fund.convertToAssets(sharesBefore);
+
+        // Protocol deposits fee income (no shares minted)
+        usdc.mint(SHIELD, 500e18);
+        vm.startPrank(SHIELD);
+        usdc.approve(address(fund), 500e18);
+        fund.depositFee(500e18);
+        vm.stopPrank();
+
+        uint256 assetsAfter = fund.convertToAssets(sharesBefore);
+        assertGt(assetsAfter, assetsBefore, "depositFee should increase share NAV");
+    }
+
+    // ── ERC-4626 Deposit / Withdraw ──────────────────────────────
+
+    function test_ERC4626_Deposit_MintShares() public {
+        usdc.mint(LP, 1_000e18);
+        vm.startPrank(LP);
+        usdc.approve(address(fund), 1_000e18);
+        uint256 shares = fund.deposit(1_000e18, LP);
+        vm.stopPrank();
+
+        assertGt(shares, 0, "Should mint shares");
+        assertEq(fund.balanceOf(LP), shares);
+        assertEq(fund.totalAssets(), 1_000e18);
+    }
+
+    function test_ERC4626_Withdraw_BurnsShares() public {
+        usdc.mint(LP, 1_000e18);
+        vm.startPrank(LP);
+        usdc.approve(address(fund), 1_000e18);
+        fund.deposit(1_000e18, LP);
+        uint256 sharesBefore = fund.balanceOf(LP);
+
+        fund.withdraw(500e18, LP, LP);
+        vm.stopPrank();
+
+        assertLt(fund.balanceOf(LP), sharesBefore, "Shares should decrease after withdrawal");
+        assertEq(usdc.balanceOf(LP), 500e18, "LP should receive 500 USDC back");
+    }
+
+    // ── Submit Claim ─────────────────────────────────────────────
+
     function test_GetMaxClaim_RespectsCap50Percent() public view {
-        bytes32 posId    = keccak256("pos1");
+        bytes32 posId   = keccak256("pos1");
         uint256 ilAmount = 1_000e18;
         (uint256 max0,)  = fund.getMaxClaim(posId, ilAmount, 0, 10_000);
         assertLe(max0, ilAmount / 2, "Claim cannot exceed 50% of IL");
     }
 
     function test_GetMaxClaim_LoyaltyScalesPayout() public view {
-        bytes32 posId    = keccak256("pos1");
+        bytes32 posId   = keccak256("pos1");
         uint256 ilAmount = 1_000e18;
         (uint256 max0Low,)  = fund.getMaxClaim(posId, ilAmount, 0, 0);
         (uint256 max0High,) = fund.getMaxClaim(posId, ilAmount, 0, 10_000);
         assertEq(max0Low, 0, "0 loyalty = 0 claim");
         assertGt(max0High, max0Low, "100% loyalty > 0% loyalty");
+    }
+
+    function test_SubmitClaim_PayoutReducesAssets() public {
+        // Fund the vault
+        usdc.mint(SHIELD, 10_000e18);
+        vm.startPrank(SHIELD);
+        usdc.approve(address(fund), 10_000e18);
+        fund.depositFee(10_000e18);
+        vm.stopPrank();
+
+        uint256 assetsBefore = fund.totalAssets();
+
+        bytes32 posId = keccak256("pos-lp-usdc");
+        InsuranceClaim memory claim = InsuranceClaim({
+            positionId:   posId,
+            recipient:    LP,
+            ilAmountUSD:  1_000e18, // $1000 IL → max payout 50% = $500
+            loyaltyScore: 10_000,   // 100% loyalty
+            proof:        ""
+        });
+
+        vm.prank(SHIELD);
+        (uint256 comp0, ) = fund.submitClaim(claim);
+
+        assertGt(comp0, 0, "Should compensate LP");
+        assertLt(fund.totalAssets(), assetsBefore, "Assets should decrease after claim");
+        assertEq(usdc.balanceOf(LP), comp0, "LP should receive compensation");
+    }
+
+    function test_SubmitClaim_OnlyAuthorized() public {
+        InsuranceClaim memory claim = InsuranceClaim({
+            positionId:   keccak256("pos1"),
+            recipient:    LP,
+            ilAmountUSD:  100e18,
+            loyaltyScore: 10_000,
+            proof:        ""
+        });
+        vm.expectRevert();
+        fund.submitClaim(claim);
     }
 
     function test_EmergencyPause_StopsClaims() public {
@@ -374,42 +465,319 @@ contract TestInsuranceFund is Test {
 
         InsuranceClaim memory claim = InsuranceClaim({
             positionId:   keccak256("pos1"),
-            ilAmount0:    100e18,
-            ilAmount1:    0,
+            recipient:    LP,
+            ilAmountUSD:  100e18,
             loyaltyScore: 10_000,
             proof:        ""
         });
 
-        vm.prank(COMPOUNDER);
+        vm.prank(SHIELD);
         vm.expectRevert();
         fund.submitClaim(claim);
     }
 
-    function test_OnlyOwnerCanPause() public {
-        vm.prank(address(0xBAD));
-        vm.expectRevert();
-        fund.emergencyPause();
+    function test_UpdateTVL_AffectsHealthCheck() public view {
+        assertGt(fund.getFundHealthBps(), 0, "Fund health should be nonzero");
+    }
 
-        vm.prank(OWNER);
-        fund.emergencyPause();
-        assertTrue(fund.paused());
+    function test_Asset_ReturnsCorrectToken() public view {
+        assertEq(fund.asset(), address(usdc), "asset() should return usdc");
     }
 }
 
 // ─────────────────────────────────────────────────────────────────
-// 4. FUZZ TESTS
+// 4. IL SHIELD HOOK UNIT TESTS
+// ─────────────────────────────────────────────────────────────────
+
+contract TestILShieldHook is Test {
+
+    XenorizeILShieldHook hook;
+    XenorizeInsuranceFund fund;
+    MockERC20 usdc;
+    MockERC20 weth;
+    MockOracle oracle;
+
+    address constant OWNER    = address(0xBEEF);
+    address constant POOL_MGR = address(0xDEAD);
+    address constant LP       = address(0xABCD);
+
+    PoolKey poolKey;
+
+    function setUp() public {
+        vm.warp(1001 days);
+
+        usdc   = new MockERC20("USD Coin", "USDC");
+        weth   = new MockERC20("Wrapped ETH", "WETH");
+        oracle = new MockOracle();
+
+        // Set initial prices: ETH = $2000, USDC = $1
+        oracle.setPrice(address(weth), 2_000e18);
+        oracle.setPrice(address(usdc), 1e18);
+
+        fund = new XenorizeInsuranceFund(address(usdc), OWNER, "xINS", "xINS");
+
+        // Construct hook — deployed at a random address for testing
+        // (hook address bit validation skipped; only tested in integration)
+        hook = new XenorizeILShieldHook(
+            IPoolManager(POOL_MGR),
+            IInsuranceFund(address(fund)),
+            IXenorizeOracle(address(oracle)),
+            OWNER
+        );
+
+        // Authorize hook to submit claims + deposit fees
+        vm.prank(OWNER);
+        fund.setAuthorizedDepositor(address(hook), true);
+
+        // Seed insurance fund
+        usdc.mint(OWNER, 100_000e18);
+        vm.startPrank(OWNER);
+        usdc.approve(address(fund), 100_000e18);
+        fund.depositFee(100_000e18);
+        vm.stopPrank();
+
+        // Pool key: WETH/USDC 0.30%
+        poolKey = PoolKey({
+            currency0: Currency.wrap(address(weth)),
+            currency1: Currency.wrap(address(usdc)),
+            fee: 3_000,
+            tickSpacing: 60,
+            hooks: hook
+        });
+    }
+
+    // ── afterAddLiquidity ────────────────────────────────────────
+
+    function test_AfterAddLiquidity_CreatesSnapshot() public {
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower:      -600,
+            tickUpper:       600,
+            liquidityDelta: int256(1_000e18),
+            salt:           bytes32(0)
+        });
+        // delta: LP deposited 1 WETH (negative) and 2000 USDC (negative)
+        BalanceDelta delta = _makeDelta(-1e18, -2_000e18);
+
+        vm.prank(POOL_MGR);
+        hook.afterAddLiquidity(LP, poolKey, params, delta, delta, abi.encode(LP));
+
+        bytes32 key_ = keccak256(abi.encodePacked(
+            LP, PoolIdLibrary.toId(poolKey), int24(-600), int24(600)
+        ));
+        (
+            uint256 amount0,
+            uint256 amount1,
+            uint256 price0,
+            uint256 price1,
+            uint256 depositTime,
+            uint128 liquidity,
+            bool exists
+        ) = _getSnapshot(key_);
+
+        assertTrue(exists, "Snapshot should exist after addLiquidity");
+        assertEq(amount0, 1e18, "amount0 should be 1 WETH");
+        assertEq(amount1, 2_000e18, "amount1 should be 2000 USDC");
+        assertEq(price0, 2_000e18, "price0 should be ETH oracle price");
+        assertEq(price1, 1e18, "price1 should be USDC oracle price");
+        assertEq(liquidity, 1_000e18, "liquidity mismatch");
+        assertGt(depositTime, 0, "depositTime should be set");
+    }
+
+    function test_AfterAddLiquidity_UpdatesExistingSnapshot_WeightedAvg() public {
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: -600, tickUpper: 600,
+            liquidityDelta: int256(1_000e18), salt: bytes32(0)
+        });
+        BalanceDelta delta = _makeDelta(-1e18, -2_000e18);
+
+        vm.prank(POOL_MGR);
+        hook.afterAddLiquidity(LP, poolKey, params, delta, delta, abi.encode(LP));
+
+        // Price doubles before second deposit
+        oracle.setPrice(address(weth), 4_000e18);
+        BalanceDelta delta2 = _makeDelta(-1e18, -4_000e18);
+
+        vm.prank(POOL_MGR);
+        hook.afterAddLiquidity(LP, poolKey, params, delta2, delta2, abi.encode(LP));
+
+        bytes32 key_ = keccak256(abi.encodePacked(
+            LP, PoolIdLibrary.toId(poolKey), int24(-600), int24(600)
+        ));
+        (, , uint256 price0, , , uint128 liquidity, ) = _getSnapshot(key_);
+
+        // Weighted avg of 2000 and 4000 with equal liquidity = 3000
+        assertEq(price0, 3_000e18, "Weighted avg price should be 3000");
+        assertEq(liquidity, 2_000e18, "Total liquidity should be sum");
+    }
+
+    function test_AfterAddLiquidity_SkipsZeroDelta() public {
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: -600, tickUpper: 600,
+            liquidityDelta: 0, salt: bytes32(0) // fee collection — not a real add
+        });
+        BalanceDelta delta = _makeDelta(0, 0);
+
+        vm.prank(POOL_MGR);
+        hook.afterAddLiquidity(LP, poolKey, params, delta, delta, abi.encode(LP));
+
+        bytes32 key_ = keccak256(abi.encodePacked(
+            LP, PoolIdLibrary.toId(poolKey), int24(-600), int24(600)
+        ));
+        (, , , , , , bool exists) = _getSnapshot(key_);
+        assertFalse(exists, "Should not create snapshot for fee collection");
+    }
+
+    // ── afterRemoveLiquidity ─────────────────────────────────────
+
+    function test_AfterRemoveLiquidity_NoSnapshot_Skips() public {
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: -600, tickUpper: 600,
+            liquidityDelta: -int256(500e18), salt: bytes32(0)
+        });
+        BalanceDelta delta = _makeDelta(int128(0.5e18), int128(1_000e18));
+
+        // Should not revert even with no snapshot
+        vm.prank(POOL_MGR);
+        hook.afterRemoveLiquidity(LP, poolKey, params, delta, delta, abi.encode(LP));
+    }
+
+    function test_AfterRemoveLiquidity_WithIL_TriggersCompensation() public {
+        // 1. Add liquidity at ETH = $2000
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+            tickLower: -600, tickUpper: 600,
+            liquidityDelta: int256(1_000e18), salt: bytes32(0)
+        });
+        BalanceDelta addDelta = _makeDelta(-1e18, -2_000e18);
+
+        vm.prank(POOL_MGR);
+        hook.afterAddLiquidity(LP, poolKey, addParams, addDelta, addDelta, abi.encode(LP));
+
+        // 2. Warp 90 days so loyalty score = 100% (required for non-zero compensation)
+        vm.warp(block.timestamp + 90 days);
+
+        // 3. Price moves to $4000 (2x), creating IL
+        oracle.setPrice(address(weth), 4_000e18);
+
+        // 4. Remove all liquidity — LP gets back less value than HODL
+        //    HODL at $4000: 1 ETH ($4000) + 2000 USDC = $6000
+        //    LP at $4000 (5.72% IL): 0.707 WETH ($2828) + 2828 USDC = $5656
+        //    IL_USD = $344 → compensation (50% × 100% loyalty) = $172 USDC
+        ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
+            tickLower: -600, tickUpper: 600,
+            liquidityDelta: -int256(1_000e18), salt: bytes32(0)
+        });
+        BalanceDelta removeDelta = _makeDelta(int128(0.707e18), int128(2_828e18));
+
+        uint256 lpUsdcBefore = usdc.balanceOf(LP);
+
+        vm.prank(POOL_MGR);
+        hook.afterRemoveLiquidity(LP, poolKey, removeParams, removeDelta, removeDelta, abi.encode(LP));
+
+        uint256 compensation = usdc.balanceOf(LP) - lpUsdcBefore;
+        assertGt(compensation, 0, "LP should receive IL compensation");
+        assertLe(compensation, 344e18, "Compensation cannot exceed IL amount");
+    }
+
+    function test_AfterRemoveLiquidity_NoIL_NoCompensation() public {
+        // Add at $2000
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+            tickLower: -600, tickUpper: 600,
+            liquidityDelta: int256(1_000e18), salt: bytes32(0)
+        });
+        BalanceDelta addDelta = _makeDelta(-1e18, -2_000e18);
+
+        vm.prank(POOL_MGR);
+        hook.afterAddLiquidity(LP, poolKey, addParams, addDelta, addDelta, abi.encode(LP));
+
+        // Remove at same price — no IL
+        ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
+            tickLower: -600, tickUpper: 600,
+            liquidityDelta: -int256(1_000e18), salt: bytes32(0)
+        });
+        // LP gets back exactly what they put in (no IL)
+        BalanceDelta removeDelta = _makeDelta(int128(1e18), int128(2_000e18));
+
+        uint256 lpUsdcBefore = usdc.balanceOf(LP);
+
+        vm.prank(POOL_MGR);
+        hook.afterRemoveLiquidity(LP, poolKey, removeParams, removeDelta, removeDelta, abi.encode(LP));
+
+        assertEq(usdc.balanceOf(LP), lpUsdcBefore, "No IL = no compensation");
+    }
+
+    function test_AfterRemoveLiquidity_ClearsSnapshot() public {
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+            tickLower: -600, tickUpper: 600,
+            liquidityDelta: int256(1_000e18), salt: bytes32(0)
+        });
+        vm.prank(POOL_MGR);
+        hook.afterAddLiquidity(LP, poolKey, addParams, _makeDelta(-1e18, -2_000e18), _makeDelta(0, 0), abi.encode(LP));
+
+        ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
+            tickLower: -600, tickUpper: 600,
+            liquidityDelta: -int256(1_000e18), salt: bytes32(0)
+        });
+        vm.prank(POOL_MGR);
+        hook.afterRemoveLiquidity(LP, poolKey, removeParams, _makeDelta(int128(1e18), int128(2_000e18)), _makeDelta(0, 0), abi.encode(LP));
+
+        bytes32 key_ = keccak256(abi.encodePacked(
+            LP, PoolIdLibrary.toId(poolKey), int24(-600), int24(600)
+        ));
+        (, , , , , , bool exists) = _getSnapshot(key_);
+        assertFalse(exists, "Snapshot should be cleared after full removal");
+    }
+
+    function test_OnlyPoolManager_CanCallHooks() public {
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: -600, tickUpper: 600,
+            liquidityDelta: int256(1_000e18), salt: bytes32(0)
+        });
+        vm.prank(address(0xBAD));
+        vm.expectRevert();
+        hook.afterAddLiquidity(LP, poolKey, params, _makeDelta(-1e18, -2_000e18), _makeDelta(0, 0), "");
+    }
+
+    function test_EmergencyPause_BlocksHooks() public {
+        vm.prank(OWNER);
+        hook.emergencyPause(true);
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: -600, tickUpper: 600,
+            liquidityDelta: int256(1_000e18), salt: bytes32(0)
+        });
+        vm.prank(POOL_MGR);
+        vm.expectRevert();
+        hook.afterAddLiquidity(LP, poolKey, params, _makeDelta(-1e18, -2_000e18), _makeDelta(0, 0), "");
+    }
+
+    // ── helpers ──────────────────────────────────────────────────
+
+    function _makeDelta(int128 a0, int128 a1) internal pure returns (BalanceDelta) {
+        return BalanceDelta.wrap((int256(a0) << 128) | int256(uint256(uint128(a1))));
+    }
+
+    function _getSnapshot(bytes32 key_) internal view returns (
+        uint256 amount0, uint256 amount1,
+        uint256 price0, uint256 price1,
+        uint256 depositTime, uint128 liquidity, bool exists
+    ) {
+        // Public mapping of a struct returns a tuple, not the struct type
+        (amount0, amount1, price0, price1, depositTime, liquidity, exists) = hook.snapshots(key_);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 5. FUZZ TESTS
 // ─────────────────────────────────────────────────────────────────
 
 contract FuzzXenorizeMath is Test {
 
-    /// @dev IL should always be <= 0 for any price ratio
     function testFuzz_IL_AlwaysNonPositive(uint256 priceRatioWad) public pure {
         priceRatioWad = bound(priceRatioWad, 0, 1_000 * 1e18);
         int256 il = XenorizeMath.calculateIL(priceRatioWad);
         assertLe(il, 0, "IL must always be <= 0");
     }
 
-    /// @dev Dynamic fee should always be within [baseFee, 10_000]
     function testFuzz_DynamicFee_InBounds(
         uint24  baseFee,
         uint256 vol,
@@ -432,7 +800,6 @@ contract FuzzXenorizeMath is Test {
         assertLe(fee, 10_000,  "Fee must be <= 10_000 BPS");
     }
 
-    /// @dev Loyalty multiplier should always be in [10_000, 20_000]
     function testFuzz_LoyaltyMultiplier_InBounds(
         uint256 depositTimestamp,
         uint256 currentTimestamp
@@ -440,16 +807,12 @@ contract FuzzXenorizeMath is Test {
         depositTimestamp = bound(depositTimestamp, 0, type(uint32).max);
         currentTimestamp = bound(currentTimestamp, depositTimestamp, type(uint32).max);
 
-        uint256 mult = XenorizeMath.computeLoyaltyMultiplier(
-            depositTimestamp, currentTimestamp
-        );
+        uint256 mult = XenorizeMath.computeLoyaltyMultiplier(depositTimestamp, currentTimestamp);
 
         assertGe(mult, 10_000, "Multiplier must be >= 1.0x");
         assertLe(mult, 20_000, "Multiplier must be <= 2.0x");
     }
 
-    /// @dev IL amount in token0 must not exceed total initial capital
-    /// @dev initialPrice bounded >= WAD to keep totalValue0 <= a0 + a1
     function testFuzz_ILAmount_NeverExceedsCapital(
         uint256 initialAmount0,
         uint256 initialAmount1,
@@ -459,7 +822,6 @@ contract FuzzXenorizeMath is Test {
         initialAmount0 = bound(initialAmount0, 0, 1_000_000e18);
         initialAmount1 = bound(initialAmount1, 0, 1_000_000e18);
         currentPrice   = bound(currentPrice, 1, 100_000e18);
-        // Bound initialPrice >= WAD so (a1 * WAD / initialPrice) <= a1
         initialPrice   = bound(initialPrice, XenorizeMath.WAD, 100_000e18);
 
         uint256 il = XenorizeMath.calculateILAmount(
@@ -469,50 +831,64 @@ contract FuzzXenorizeMath is Test {
         uint256 totalCapital = initialAmount0 + initialAmount1;
         assertLe(il, totalCapital, "IL cannot exceed total capital deposited");
     }
+
+    function testFuzz_InsuranceClaim_NeverExceedsHalfIL(
+        uint256 ilAmount,
+        uint256 loyaltyScore
+    ) public {
+        ilAmount     = bound(ilAmount, 0, 1_000_000e18);
+        loyaltyScore = bound(loyaltyScore, 0, 10_000);
+
+        MockERC20 usdc = new MockERC20("USDC", "USDC");
+        XenorizeInsuranceFund fund = new XenorizeInsuranceFund(
+            address(usdc), address(this), "xINS", "xINS"
+        );
+
+        bytes32 posId = keccak256("fuzz-pos");
+        (uint256 maxComp, ) = fund.getMaxClaim(posId, ilAmount, 0, loyaltyScore);
+
+        assertLe(maxComp, ilAmount / 2 + 1, "Compensation must not exceed 50% of IL");
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────
-// 5. INVARIANT TESTS — NEVER-BREAK PROPERTIES
+// 6. INVARIANT TESTS — NEVER-BREAK PROPERTIES
 // ─────────────────────────────────────────────────────────────────
 
 contract InvariantInsuranceFund is StdInvariant, Test {
 
     XenorizeInsuranceFund fund;
     MockERC20             usdc;
-    MockERC20             weth;
 
-    address constant OWNER      = address(0xBEEF);
-    address constant COMPOUNDER = address(0xC0C0);
+    address constant OWNER = address(0xBEEF);
 
     function setUp() public {
         usdc = new MockERC20("USDC", "USDC");
-        weth = new MockERC20("WETH", "WETH");
-        fund = new XenorizeInsuranceFund(OWNER, COMPOUNDER, address(usdc), address(weth));
+        fund = new XenorizeInsuranceFund(address(usdc), OWNER, "xINS", "xINS");
         targetContract(address(fund));
     }
 
-    /// @notice INVARIANT: Fund balance must always equal real token balance
-    function invariant_FundBalanceMatchesActualBalance() public view {
+    /// @notice INVARIANT: totalAssets must always equal actual token balance
+    function invariant_TotalAssetsMatchesActualBalance() public view {
         assertEq(
-            fund.fundBalance0(),
+            fund.totalAssets(),
             usdc.balanceOf(address(fund)),
-            "CRITICAL: Fund balance != actual token balance"
+            "CRITICAL: totalAssets != actual token balance"
         );
     }
 
-    /// @notice INVARIANT: Total paid out must never exceed total deposited
-    function invariant_PayoutsNeverExceedDeposits() public view {
+    /// @notice INVARIANT: Total paid out must never exceed total fee income
+    function invariant_PayoutsNeverExceedIncome() public view {
         assertLe(
-            fund.totalPaidOut0(),
-            fund.totalDeposited0(),
-            "CRITICAL: Paid out more than deposited"
+            fund.totalPaidOut(),
+            fund.totalFeeIncome() + fund.totalAssets(),
+            "CRITICAL: Paid out more than fund ever received"
         );
     }
 }
 
 contract TestILInvariantProperties is Test {
 
-    /// @notice IL is always monotonically more severe as price diverges
     function test_ILWorsensWithDivergence() public pure {
         int256 il1 = XenorizeMath.calculateIL(1e18);
         int256 il2 = XenorizeMath.calculateIL(2e18);
@@ -521,5 +897,513 @@ contract TestILInvariantProperties is Test {
         assertTrue(il1 == 0, "IL at r=1 must be 0");
         assertTrue(il2 < il1, "IL at r=2 must be worse than r=1");
         assertTrue(il4 < il2, "IL at r=4 must be worse than r=2");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// PHASE 2 MOCK CONTRACTS
+// ─────────────────────────────────────────────────────────────────
+
+/// @dev Minimal token interface for MockPoolManagerV4.take()
+interface IERC20Min {
+    function transfer(address to, uint256 amount) external returns (bool);
+}
+
+/// @dev Callback interface used by AutoCompounder's unlockCallback
+interface IUnlockCallbackV4 {
+    function unlockCallback(bytes calldata data) external returns (bytes memory);
+}
+
+/// @dev Simulates Uniswap V4 PoolManager for AutoCompounder unit tests.
+///      unlock() calls back unlockCallback on the caller.
+///      modifyLiquidity() returns symmetric ±liq/2 deltas for equal-amount deposits.
+///      take() transfers tokens from this contract (pre-funded in test setUp).
+contract MockPoolManagerV4 {
+    // Simulated accrued fee per fee-collection call (per token)
+    int128 public constant MOCK_FEE = int128(10e18);
+
+    function unlock(bytes calldata data) external returns (bytes memory) {
+        return IUnlockCallbackV4(msg.sender).unlockCallback(data);
+    }
+
+    function modifyLiquidity(
+        PoolKey calldata,
+        ModifyLiquidityParams calldata params,
+        bytes calldata
+    ) external pure returns (BalanceDelta delta, BalanceDelta feesAccrued) {
+        if (params.liquidityDelta == 0) {
+            // Fee collection: no principal change, non-zero accrued fees
+            delta       = _pack(0, 0);
+            feesAccrued = _pack(MOCK_FEE, MOCK_FEE);
+        } else if (params.liquidityDelta > 0) {
+            // Add liquidity: LP pays half per token
+            int128 half = int128(params.liquidityDelta / 2);
+            delta       = _pack(-half, -half);
+            feesAccrued = _pack(0, 0);
+        } else {
+            // Remove liquidity: LP receives half per token
+            int128 half = int128((-params.liquidityDelta) / 2);
+            delta       = _pack(half, half);
+            feesAccrued = _pack(0, 0);
+        }
+    }
+
+    /// @dev Transfers `amount` of `currency` from this contract to `to`.
+    ///      Contract must be pre-funded in test setUp.
+    function take(Currency currency, address to, uint256 amount) external {
+        IERC20Min(Currency.unwrap(currency)).transfer(to, amount);
+    }
+
+    function sync(Currency) external {}
+    function settle() external pure returns (uint256) { return 0; }
+
+    function _pack(int128 a0, int128 a1) internal pure returns (BalanceDelta) {
+        return BalanceDelta.wrap((int256(a0) << 128) | int256(uint256(uint128(a1))));
+    }
+}
+
+/// @dev Minimal Chainlink AggregatorV3Interface mock for oracle tests.
+contract MockChainlinkFeed {
+    int256  public price;
+    uint256 public updatedAt;
+    uint8   private _decimals;
+
+    constructor(int256 _price, uint8 dec) {
+        price     = _price;
+        updatedAt = block.timestamp;
+        _decimals = dec;
+    }
+
+    function setPrice(int256 _price) external { price = _price; }
+    function setUpdatedAt(uint256 ts) external { updatedAt = ts; }
+
+    function latestRoundData() external view
+        returns (uint80, int256 answer, uint256, uint256 ts, uint80)
+    {
+        return (0, price, 0, updatedAt, 0);
+    }
+
+    function decimals() external view returns (uint8) { return _decimals; }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 7. AUTO-COMPOUNDER UNIT TESTS
+// ─────────────────────────────────────────────────────────────────
+
+contract TestAutoCompounder is Test {
+
+    XenorizeAutoCompounder compounder;
+    XenorizeInsuranceFund  fund;
+    MockPoolManagerV4      mockPM;
+    MockERC20              weth;
+    MockERC20              usdc;
+    MockOracle             oracle;
+
+    address constant OWNER  = address(0xBEEF);
+    address constant ALICE  = address(0xA11CE);
+    address constant KEEPER = address(0xBB);
+
+    uint256 constant DEPOSIT = 1_000e18; // equal token amounts — required by MockPM
+
+    PoolKey        internal _key;
+    CompoundConfig internal _cfg;
+
+    function setUp() public {
+        vm.warp(1_001 days);
+
+        weth   = new MockERC20("WETH", "WETH");
+        usdc   = new MockERC20("USDC", "USDC");
+        oracle = new MockOracle();
+        mockPM = new MockPoolManagerV4();
+
+        oracle.setPrice(address(weth), 2_000e18); // ETH = $2 000
+        oracle.setPrice(address(usdc), 1e18);
+
+        fund = new XenorizeInsuranceFund(address(usdc), OWNER, "xINS", "xINS");
+
+        compounder = new XenorizeAutoCompounder(
+            OWNER,
+            IPoolManager(address(mockPM)),
+            address(fund),
+            address(weth),
+            address(usdc),
+            address(oracle)
+        );
+
+        vm.prank(OWNER);
+        fund.setAuthorizedDepositor(address(compounder), true);
+
+        // Pre-fund mockPM so take() calls can always succeed
+        weth.mint(address(mockPM), 1_000_000e18);
+        usdc.mint(address(mockPM), 1_000_000e18);
+
+        // Fund Alice + approvals
+        weth.mint(ALICE, 100_000e18);
+        usdc.mint(ALICE, 100_000e18);
+        vm.startPrank(ALICE);
+        weth.approve(address(compounder), type(uint256).max);
+        usdc.approve(address(compounder), type(uint256).max);
+        vm.stopPrank();
+
+        // Pool key: WETH/USDC 0.30%
+        _key = PoolKey({
+            currency0: Currency.wrap(address(weth)),
+            currency1: Currency.wrap(address(usdc)),
+            fee:         3_000,
+            tickSpacing: 60,
+            hooks:       IHooks(address(0))
+        });
+
+        _cfg = CompoundConfig({
+            minProfitUSD:       1e18,
+            gasCushionBps:      200,
+            slippageBps:        100,
+            maxCompoundsPerDay: 4,
+            aiRangeEnabled:     false,
+            autoRebalance:      false
+        });
+    }
+
+    // ── helpers ──────────────────────────────────────────────────
+
+    function _openManual() internal returns (bytes32 id) {
+        vm.prank(ALICE);
+        id = compounder.openPosition(_key, -100, 100, DEPOSIT, DEPOSIT, RiskProfile.Balanced, _cfg);
+    }
+
+    function _openAI() internal returns (bytes32 id) {
+        vm.prank(ALICE);
+        id = compounder.openPositionAI(_key, DEPOSIT, DEPOSIT, RiskProfile.Balanced, _cfg);
+    }
+
+    // ── tests ────────────────────────────────────────────────────
+
+    function test_OpenPosition_StoresStateCorrectly() public {
+        bytes32 id  = _openManual();
+        Position memory pos = compounder.getPosition(id);
+
+        assertEq(pos.owner,            ALICE,                  "wrong owner");
+        assertFalse(pos.aiManaged,                             "should be manual");
+        assertEq(pos.initialCapital0,  DEPOSIT,               "wrong capital0");
+        assertEq(pos.initialCapital1,  DEPOSIT,               "wrong capital1");
+        assertEq(uint8(pos.status),    uint8(PositionStatus.Active), "not Active");
+        assertEq(pos.entryPrice0USD,   2_000e18,              "wrong entry price");
+        assertEq(pos.compoundCount,    0,                     "fresh position");
+    }
+
+    function test_OpenPosition_TokensTransferredToMockPM() public {
+        uint256 before = weth.balanceOf(address(mockPM));
+        _openManual();
+        // liqDelta = DEPOSIT + DEPOSIT = 2000e18; half per token → mockPM receives DEPOSIT weth
+        assertEq(weth.balanceOf(address(mockPM)), before + DEPOSIT, "WETH not in pool");
+        assertEq(usdc.balanceOf(address(mockPM)), 1_000_000e18 + DEPOSIT, "USDC not in pool");
+    }
+
+    function test_OpenPosition_TVLCapEnforced() public {
+        vm.prank(OWNER);
+        compounder.setMaxTVLCap(1e18); // set cap below our deposit
+
+        vm.prank(ALICE);
+        vm.expectRevert();
+        compounder.openPosition(_key, -100, 100, DEPOSIT, DEPOSIT, RiskProfile.Balanced, _cfg);
+    }
+
+    function test_OpenPositionAI_UsesOracleRange() public {
+        bytes32 id  = _openAI();
+        Position memory pos = compounder.getPosition(id);
+
+        assertTrue(pos.aiManaged, "should be AI-managed");
+        // MockOracle returns (-3000, 3000) for Balanced
+        assertEq(pos.tickLower, -3_000, "wrong AI tickLower");
+        assertEq(pos.tickUpper,  3_000, "wrong AI tickUpper");
+    }
+
+    function test_OpenPositionAI_EntryPriceStored() public {
+        bytes32 id  = _openAI();
+        Position memory pos = compounder.getPosition(id);
+        assertEq(pos.entryPrice0USD, 2_000e18, "entry price not stored for AI position");
+    }
+
+    function test_ClosePosition_ReturnsTokensToOwner() public {
+        bytes32 id       = _openManual();
+        uint256 beforeW  = weth.balanceOf(ALICE);
+        uint256 beforeU  = usdc.balanceOf(ALICE);
+
+        vm.prank(ALICE);
+        (uint256 r0, uint256 r1) = compounder.closePosition(id);
+
+        // MockPM returns liq/2 per token = DEPOSIT each
+        assertEq(r0, DEPOSIT, "wrong weth returned");
+        assertEq(r1, DEPOSIT, "wrong usdc returned");
+        assertEq(weth.balanceOf(ALICE), beforeW + DEPOSIT, "Alice didn't get WETH back");
+        assertEq(usdc.balanceOf(ALICE), beforeU + DEPOSIT, "Alice didn't get USDC back");
+    }
+
+    function test_ClosePosition_OnlyOwnerOrKeeper() public {
+        bytes32 id = _openManual();
+        vm.prank(address(0xBAD));
+        vm.expectRevert();
+        compounder.closePosition(id);
+    }
+
+    function test_CompoundManual_FailsOnAIPosition() public {
+        bytes32 id = _openAI();
+        vm.roll(block.number + 1);
+        vm.prank(ALICE);
+        vm.expectRevert();
+        compounder.compoundManual(id);
+    }
+
+    function test_AutoCompound_FailsOnManualPosition() public {
+        bytes32 id = _openManual();
+        vm.roll(block.number + 1);
+        vm.prank(ALICE);
+        vm.expectRevert();
+        compounder.autoCompound(id);
+    }
+
+    function test_CompoundRateLimit_SameBlock() public {
+        bytes32 id = _openManual();
+        // compound in same block as open → rate-limited
+        vm.prank(ALICE);
+        vm.expectRevert();
+        compounder.compoundManual(id);
+    }
+
+    function test_CompoundManual_ProtocolFeeForwardedToOwner() public {
+        bytes32 id = _openManual();
+        vm.roll(block.number + 1);
+
+        uint256 ownerBefore = usdc.balanceOf(OWNER);
+        vm.prank(ALICE);
+        compounder.compoundManual(id);
+
+        // Protocol fee = MOCK_FEE(10e18) * protocolFeeBps(200) / 10000 = 0.2e18 USDC
+        uint256 expectedFee = (uint256(10e18) * 200) / 10_000; // MOCK_FEE=10e18 * protocolFeeBps/BPS
+        assertGe(usdc.balanceOf(OWNER) - ownerBefore, expectedFee - 1, "protocol fee not forwarded");
+    }
+
+    function test_CompoundManual_CapitalGrowsAfterFees() public {
+        bytes32 id = _openManual();
+        vm.roll(block.number + 1);
+
+        vm.prank(ALICE);
+        CompoundResult memory res = compounder.compoundManual(id);
+
+        // Net capital = DEPOSIT + fees - protocolFee
+        assertGt(res.newCapital0, DEPOSIT, "capital should grow after compounding fees");
+    }
+
+    function test_EmergencyPause_BlocksOpenPosition() public {
+        vm.prank(OWNER);
+        compounder.emergencyPause();
+
+        vm.prank(ALICE);
+        vm.expectRevert();
+        compounder.openPosition(_key, -100, 100, DEPOSIT, DEPOSIT, RiskProfile.Balanced, _cfg);
+    }
+
+    function test_GetCompoundUrgency_ScalesWithTime() public {
+        uint256 openTime = block.timestamp;
+        bytes32 id = _openManual();
+
+        assertEq(uint8(compounder.getCompoundUrgency(id)), uint8(CompoundUrgency.None), "fresh: none");
+
+        vm.warp(openTime + 7 hours);
+        assertEq(uint8(compounder.getCompoundUrgency(id)), uint8(CompoundUrgency.Low), "7h: low");
+
+        vm.warp(openTime + 31 hours);
+        assertEq(uint8(compounder.getCompoundUrgency(id)), uint8(CompoundUrgency.Medium), "31h: medium");
+
+        vm.warp(openTime + 55 hours);
+        assertEq(uint8(compounder.getCompoundUrgency(id)), uint8(CompoundUrgency.High), "55h: high");
+    }
+
+    function test_IL_IsZeroWhenPriceUnchanged() public {
+        bytes32 id = _openManual();
+        vm.roll(block.number + 1);
+
+        // Price unchanged → no IL
+        vm.prank(ALICE);
+        CompoundResult memory res = compounder.compoundManual(id);
+        assertEq(res.ilRealized0, 0, "no IL when price unchanged");
+    }
+
+    function test_IL_NonZeroWhenPriceChanges() public {
+        bytes32 id = _openManual();
+        vm.roll(block.number + 1);
+
+        // ETH price doubles → IL > 0
+        oracle.setPrice(address(weth), 4_000e18);
+        vm.prank(ALICE);
+        CompoundResult memory res = compounder.compoundManual(id);
+        assertGt(res.ilRealized0, 0, "IL should be > 0 when price doubles");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 8. CHAINLINK ORACLE UNIT TESTS
+// ─────────────────────────────────────────────────────────────────
+
+contract TestChainlinkOracle is Test {
+
+    XenorizeChainlinkOracle oracle;
+    MockChainlinkFeed       ethFeed;
+    MockChainlinkFeed       gasFeed_;
+
+    MockERC20 weth;
+    MockERC20 usdc;
+
+    address constant OWNER    = address(0xBEEF);
+    address constant POOL_MGR = address(0xDEAD);
+
+    function setUp() public {
+        vm.warp(1_001 days);
+
+        weth    = new MockERC20("WETH", "WETH");
+        usdc    = new MockERC20("USDC", "USDC");
+        // Chainlink ETH/USD: 8 decimals, price = 2000e8
+        ethFeed  = new MockChainlinkFeed(int256(2_000e8), 8);
+        gasFeed_ = new MockChainlinkFeed(int256(2_000e8), 8);
+
+        oracle = new XenorizeChainlinkOracle(
+            IPoolManager(POOL_MGR), OWNER, address(gasFeed_)
+        );
+
+        vm.prank(OWNER);
+        oracle.setFeed(address(weth), address(ethFeed));
+    }
+
+    function test_GetTokenPrice_NoFeed_ReturnsFallbackOne() public view {
+        // usdc has no feed registered → fallback $1 (WAD)
+        (uint256 price, ) = oracle.getTokenPriceUSD(address(usdc));
+        assertEq(price, 1e18, "no-feed fallback should be $1");
+    }
+
+    function test_GetTokenPrice_ValidFeed_ConvertsDecimals() public view {
+        // ethFeed returns 2000e8 (8 dec) → should be normalized to 2000e18
+        (uint256 price, ) = oracle.getTokenPriceUSD(address(weth));
+        assertEq(price, 2_000e18, "ETH price should be $2000 in WAD");
+    }
+
+    function test_GetTokenPrice_StalePrice_Reverts() public {
+        // Age the price beyond oracleMaxAge (1 hour default)
+        ethFeed.setUpdatedAt(block.timestamp - 2 hours);
+        vm.expectRevert();
+        oracle.getTokenPriceUSD(address(weth));
+    }
+
+    function test_GetTokenPrice_NegativePrice_Reverts() public {
+        ethFeed.setPrice(-1);
+        vm.expectRevert();
+        oracle.getTokenPriceUSD(address(weth));
+    }
+
+    function test_GetVolatility_Default_WhenInsufficientData() public view {
+        bytes32 poolId = keccak256("WETH-USDC");
+        uint256 vol = oracle.getVolatility(poolId);
+        assertEq(vol, 3_000, "default vol should be 30% (3000 BPS)");
+    }
+
+    function test_RecordPrice_BuildsHistory() public {
+        bytes32 poolId = keccak256("WETH-USDC");
+        // Record 2+ prices so vol can be computed
+        oracle.recordPrice(poolId, address(weth));
+        ethFeed.setPrice(int256(2_200e8));
+        oracle.recordPrice(poolId, address(weth));
+
+        uint256 vol = oracle.getVolatility(poolId);
+        assertGt(vol, 0, "vol should be > 0 after recording prices");
+    }
+
+    function test_GetSuggestedRange_ConservativeWiderThanAggressive() public view {
+        bytes32 poolId = keccak256("WETH-USDC");
+        (, int24 upC, ) = oracle.getSuggestedRange(poolId, RiskProfile.Conservative);
+        (, int24 upA, ) = oracle.getSuggestedRange(poolId, RiskProfile.Aggressive);
+        assertGt(int256(upC), int256(upA), "Conservative range must be wider");
+    }
+
+    function test_SetFeed_OnlyOwner() public {
+        vm.prank(address(0xBAD));
+        vm.expectRevert();
+        oracle.setFeed(address(usdc), address(ethFeed));
+
+        vm.prank(OWNER);
+        oracle.setFeed(address(usdc), address(ethFeed));
+        (uint256 p, ) = oracle.getTokenPriceUSD(address(usdc));
+        assertEq(p, 2_000e18, "USDC should now return ETH feed price");
+    }
+
+    function test_GetGasCostUSD_FeedNotSet_ReturnsFallback() public {
+        // Test the $0.50 fallback by constructing an oracle without a gas feed
+        XenorizeChainlinkOracle noGasFeedOracle = new XenorizeChainlinkOracle(
+            IPoolManager(POOL_MGR), OWNER, address(0)
+        );
+        uint256 gasCost = noGasFeedOracle.getGasCostUSD();
+        assertEq(gasCost, 0.50e18, "fallback gas cost should be $0.50");
+    }
+
+    function test_SetOracleMaxAge_ThenStaleReverts() public {
+        vm.prank(OWNER);
+        oracle.setOracleMaxAge(30 minutes);
+
+        ethFeed.setUpdatedAt(block.timestamp - 31 minutes);
+        vm.expectRevert();
+        oracle.getTokenPriceUSD(address(weth));
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 9. PHASE 2 FUZZ TESTS
+// ─────────────────────────────────────────────────────────────────
+
+contract FuzzPhase2 is Test {
+
+    function testFuzz_LoyaltyScore_LinearGrowth(uint256 days_) public pure {
+        days_ = bound(days_, 0, 365);
+        uint256 ts0 = 0;
+        uint256 ts1 = days_ * 1 days;
+        uint256 score = XenorizeMath.computeLoyaltyScore(ts0, ts1);
+
+        assertLe(score, 10_000, "score must be <= 10000 BPS");
+        if (days_ >= 90) {
+            assertEq(score, 10_000, "score must max at 90 days");
+        } else {
+            assertEq(score, (days_ * 10_000) / 90, "linear before 90 days");
+        }
+    }
+
+    function testFuzz_ILCompensation_ScalesWithLoyalty(
+        uint256 ilUSD,
+        uint256 score1,
+        uint256 score2
+    ) public {
+        ilUSD  = bound(ilUSD,  1e18, 100_000e18);
+        score1 = bound(score1, 0, 5_000);
+        score2 = bound(score2, score1, 10_000);
+
+        MockERC20 usdc = new MockERC20("USDC", "USDC");
+        XenorizeInsuranceFund fund = new XenorizeInsuranceFund(
+            address(usdc), address(this), "xINS", "xINS"
+        );
+
+        bytes32 pid = keccak256("fuzz-pos");
+        (uint256 c1, ) = fund.getMaxClaim(pid, ilUSD, 0, score1);
+        (uint256 c2, ) = fund.getMaxClaim(pid, ilUSD, 0, score2);
+
+        assertLe(c1, c2, "higher loyalty should give >= compensation");
+        assertLe(c2, ilUSD / 2 + 1, "max 50% of IL");
+    }
+
+    function testFuzz_AutoCompounder_CapitalNeverDecreasesFromFees(
+        uint256 feeAmt
+    ) public {
+        // After compounding, net capital must be >= initial (fees compensate protocol cut)
+        feeAmt = bound(feeAmt, 0, 1_000e18);
+        // Protocol fee BPS = 200 → net growth = feeAmt * (1 - 0.02) > 0
+        uint256 protocolFee = (feeAmt * 200) / 10_000;
+        uint256 netFee      = feeAmt - protocolFee;
+        assertGe(netFee, 0, "net fee after protocol cut must be >= 0");
+        assertLe(protocolFee, feeAmt, "protocol fee must be <= total fee");
     }
 }

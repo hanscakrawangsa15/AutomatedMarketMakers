@@ -8,6 +8,7 @@ import {PoolKey}         from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {Currency}        from "@uniswap/v4-core/src/types/Currency.sol";
+import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 // ─── OpenZeppelin ─────────────────────────────────────────────────
 import {IERC20}         from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -152,10 +153,12 @@ contract XenorizeAutoCompounder is IUnlockCallback, ReentrancyGuard, Pausable {
             totalIL0:        0,
             riskProfile:     riskProfile,
             status:          PositionStatus.Active,
-            aiManaged:       false        // manual — LP owns the range
+            aiManaged:       false,       // manual — LP owns the range
+            entryPrice0USD:  _getPrice(address(token0))
         });
         _configs[positionId]  = config;
         _ownerPositions[msg.sender].push(positionId);
+        lastCompoundBlock[positionId] = block.number; // prevent same-block compound on open
 
         totalTVL += depositVal;
         totalPositions++;
@@ -225,10 +228,12 @@ contract XenorizeAutoCompounder is IUnlockCallback, ReentrancyGuard, Pausable {
             totalIL0:        0,
             riskProfile:     riskProfile,
             status:          PositionStatus.Active,
-            aiManaged:       true         // AI controls range on every compound
+            aiManaged:       true,        // AI controls range on every compound
+            entryPrice0USD:  _getPrice(address(token0))
         });
         _configs[positionId] = config;
         _ownerPositions[msg.sender].push(positionId);
+        lastCompoundBlock[positionId] = block.number; // prevent same-block compound on open
 
         totalTVL += depositVal;
         totalPositions++;
@@ -392,11 +397,10 @@ contract XenorizeAutoCompounder is IUnlockCallback, ReentrancyGuard, Pausable {
         })));
         (uint256 fees0, uint256 fees1) = abi.decode(feeResult, (uint256, uint256));
 
-        // Step 2: Compute IL with real oracle prices
+        // Step 2: Compute IL — compare current price to entry price stored at open time
         uint256 price0 = _getPrice(address(token0));
-        uint256 price1 = _getPrice(address(token1));
         result.ilRealized0 = XenorizeMath.calculateILAmount(
-            pos.initialCapital0, pos.initialCapital1, price0, price1
+            pos.initialCapital0, pos.initialCapital1, price0, pos.entryPrice0USD
         );
         pos.totalIL0 += result.ilRealized0;
 
@@ -442,8 +446,13 @@ contract XenorizeAutoCompounder is IUnlockCallback, ReentrancyGuard, Pausable {
 
         uint128 newLiquidity = abi.decode(readdResult, (uint128));
 
-        // Update position state
+        // Forward protocol fees to owner (they remain in contract after re-add)
+        if (result.protocolFee0 > 0) token0.safeTransfer(owner, result.protocolFee0);
+        if (result.protocolFee1 > 0) token1.safeTransfer(owner, result.protocolFee1);
+
+        // Update position state — save prevCapital before overwriting
         uint256 oldCycle       = pos.compoundCount;
+        uint256 prevCapital0   = pos.initialCapital0;
         pos.tickLower          = newTickLower;
         pos.tickUpper          = newTickUpper;
         pos.liquidity          = newLiquidity;
@@ -459,7 +468,8 @@ contract XenorizeAutoCompounder is IUnlockCallback, ReentrancyGuard, Pausable {
         result.newTickLower    = newTickLower;
         result.newTickUpper    = newTickUpper;
 
-        emit PositionCompounded(id, oldCycle + 1, newTickLower, newTickUpper, fees0, fees1, result.ilRealized0, net0 - pos.initialCapital0);
+        uint256 netGrowth0 = net0 > prevCapital0 ? net0 - prevCapital0 : 0;
+        emit PositionCompounded(id, oldCycle + 1, newTickLower, newTickUpper, fees0, fees1, result.ilRealized0, netGrowth0);
     }
 
     // ──────────────────────────────────────────────────────────────
@@ -484,7 +494,7 @@ contract XenorizeAutoCompounder is IUnlockCallback, ReentrancyGuard, Pausable {
     function _cbAddLiquidity(UnlockData memory d) internal returns (bytes memory) {
         (BalanceDelta delta,) = poolManager.modifyLiquidity(
             d.key,
-            IPoolManager.ModifyLiquidityParams({
+            ModifyLiquidityParams({
                 tickLower:      d.tickLower,
                 tickUpper:      d.tickUpper,
                 liquidityDelta: d.liquidityDelta,
@@ -518,7 +528,7 @@ contract XenorizeAutoCompounder is IUnlockCallback, ReentrancyGuard, Pausable {
     function _cbRemoveLiquidity(UnlockData memory d) internal returns (bytes memory) {
         (BalanceDelta delta,) = poolManager.modifyLiquidity(
             d.key,
-            IPoolManager.ModifyLiquidityParams({
+            ModifyLiquidityParams({
                 tickLower:      d.tickLower,
                 tickUpper:      d.tickUpper,
                 liquidityDelta: d.liquidityDelta,
@@ -549,7 +559,7 @@ contract XenorizeAutoCompounder is IUnlockCallback, ReentrancyGuard, Pausable {
     function _cbCollectFees(UnlockData memory d) internal returns (bytes memory) {
         (, BalanceDelta feesAccrued) = poolManager.modifyLiquidity(
             d.key,
-            IPoolManager.ModifyLiquidityParams({
+            ModifyLiquidityParams({
                 tickLower:      d.tickLower,
                 tickUpper:      d.tickUpper,
                 liquidityDelta: 0,
