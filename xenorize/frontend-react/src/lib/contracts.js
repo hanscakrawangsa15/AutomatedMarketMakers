@@ -1,13 +1,13 @@
 // ─── Contract Addresses ───────────────────────────────────────────
 // Auto-synced by: node sync-addresses.js  (after forge script AnvilSetup.s.sol --broadcast)
 export const ADDRESSES = {
-  autoCompounder:   "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707",
-  insuranceFund:    "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
-  dynamicFeeHook:   "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9",
-  oracle:           "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9",
-  poolManager:      "",
-  token0:           "0x5FbDB2315678afecb367f032d93F642f64180aa3",
-  token1:           "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+  autoCompounder:   "0x68B1D87F95878fE05B998F19b66F4baba5De1aed",
+  insuranceFund:    "0x0B306BF915C4d645ff596e518fAf3F9669b97016",
+  dynamicFeeHook:   "0x9A9f2CCfdE556A7E9Ff0848998Aa4a0CFD8863AE",
+  oracle:           "0x959922bE3CAee4b8Cd9a407cc3ac1C251C2007B1",
+  poolManager:      "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+  token0:           "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+  token1:           "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
 };
 
 // ─── ABIs (minimal — only functions used by the dashboard) ────────

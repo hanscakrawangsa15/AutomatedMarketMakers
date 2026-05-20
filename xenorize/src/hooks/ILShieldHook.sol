@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 // ─── Uniswap V4 ───────────────────────────────────────────────────
 import {IHooks}       from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolKey}      from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
@@ -12,6 +13,7 @@ import {Hooks}        from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {Currency}     from "@uniswap/v4-core/src/types/Currency.sol";
 // PoolOperation.sol not in this v4-core version — types are on IPoolManager
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 // ─── Xenorize ─────────────────────────────────────────────────────
 import {XenorizeMath} from "../libraries/XenorizeMath.sol";
@@ -133,7 +135,7 @@ contract XenorizeILShieldHook is IHooks, IILShieldHook {
     function afterAddLiquidity(
         address sender,
         PoolKey calldata key,
-        IPoolManager.ModifyLiquidityParams calldata params,
+        ModifyLiquidityParams calldata params,
         BalanceDelta delta,
         BalanceDelta /* feesAccrued */,
         bytes calldata hookData
@@ -199,7 +201,7 @@ contract XenorizeILShieldHook is IHooks, IILShieldHook {
     function afterRemoveLiquidity(
         address sender,
         PoolKey calldata key,
-        IPoolManager.ModifyLiquidityParams calldata params,
+        ModifyLiquidityParams calldata params,
         BalanceDelta delta,
         BalanceDelta /* feesAccrued */,
         bytes calldata hookData
@@ -353,13 +355,13 @@ contract XenorizeILShieldHook is IHooks, IILShieldHook {
         external pure override returns (bytes4) { revert(); }
     function afterInitialize(address, PoolKey calldata, uint160, int24)
         external pure override returns (bytes4) { revert(); }
-    function beforeAddLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, bytes calldata)
+    function beforeAddLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
         external pure override returns (bytes4) { revert(); }
-    function beforeRemoveLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, bytes calldata)
+    function beforeRemoveLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
         external pure override returns (bytes4) { revert(); }
-    function beforeSwap(address, PoolKey calldata, IPoolManager.SwapParams calldata, bytes calldata)
+    function beforeSwap(address, PoolKey calldata, SwapParams calldata, bytes calldata)
         external pure override returns (bytes4, BeforeSwapDelta, uint24) { revert(); }
-    function afterSwap(address, PoolKey calldata, IPoolManager.SwapParams calldata, BalanceDelta, bytes calldata)
+    function afterSwap(address, PoolKey calldata, SwapParams calldata, BalanceDelta, bytes calldata)
         external pure override returns (bytes4, int128) { revert(); }
     function beforeDonate(address, PoolKey calldata, uint256, uint256, bytes calldata)
         external pure override returns (bytes4) { revert(); }

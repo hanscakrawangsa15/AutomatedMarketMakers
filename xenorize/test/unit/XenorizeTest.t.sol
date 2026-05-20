@@ -34,8 +34,7 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-// PoolOperation.sol not in this v4-core version — types are on IPoolManager
-import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 // ─── MOCK CONTRACTS ──────────────────────────────────────────────
 
@@ -550,7 +549,7 @@ contract TestILShieldHook is Test {
     // ── afterAddLiquidity ────────────────────────────────────────
 
     function test_AfterAddLiquidity_CreatesSnapshot() public {
-        IPoolManager.ModifyLiquidityParams memory params = IPoolManager.ModifyLiquidityParams({
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower:      -600,
             tickUpper:       600,
             liquidityDelta: int256(1_000e18),
@@ -585,7 +584,7 @@ contract TestILShieldHook is Test {
     }
 
     function test_AfterAddLiquidity_UpdatesExistingSnapshot_WeightedAvg() public {
-        IPoolManager.ModifyLiquidityParams memory params = IPoolManager.ModifyLiquidityParams({
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower: -600, tickUpper: 600,
             liquidityDelta: int256(1_000e18), salt: bytes32(0)
         });
@@ -612,7 +611,7 @@ contract TestILShieldHook is Test {
     }
 
     function test_AfterAddLiquidity_SkipsZeroDelta() public {
-        IPoolManager.ModifyLiquidityParams memory params = IPoolManager.ModifyLiquidityParams({
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower: -600, tickUpper: 600,
             liquidityDelta: 0, salt: bytes32(0) // fee collection — not a real add
         });
@@ -631,7 +630,7 @@ contract TestILShieldHook is Test {
     // ── afterRemoveLiquidity ─────────────────────────────────────
 
     function test_AfterRemoveLiquidity_NoSnapshot_Skips() public {
-        IPoolManager.ModifyLiquidityParams memory params = IPoolManager.ModifyLiquidityParams({
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower: -600, tickUpper: 600,
             liquidityDelta: -int256(500e18), salt: bytes32(0)
         });
@@ -644,7 +643,7 @@ contract TestILShieldHook is Test {
 
     function test_AfterRemoveLiquidity_WithIL_TriggersCompensation() public {
         // 1. Add liquidity at ETH = $2000
-        IPoolManager.ModifyLiquidityParams memory addParams = IPoolManager.ModifyLiquidityParams({
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
             tickLower: -600, tickUpper: 600,
             liquidityDelta: int256(1_000e18), salt: bytes32(0)
         });
@@ -663,7 +662,7 @@ contract TestILShieldHook is Test {
         //    HODL at $4000: 1 ETH ($4000) + 2000 USDC = $6000
         //    LP at $4000 (5.72% IL): 0.707 WETH ($2828) + 2828 USDC = $5656
         //    IL_USD = $344 → compensation (50% × 100% loyalty) = $172 USDC
-        IPoolManager.ModifyLiquidityParams memory removeParams = IPoolManager.ModifyLiquidityParams({
+        ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
             tickLower: -600, tickUpper: 600,
             liquidityDelta: -int256(1_000e18), salt: bytes32(0)
         });
@@ -681,7 +680,7 @@ contract TestILShieldHook is Test {
 
     function test_AfterRemoveLiquidity_NoIL_NoCompensation() public {
         // Add at $2000
-        IPoolManager.ModifyLiquidityParams memory addParams = IPoolManager.ModifyLiquidityParams({
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
             tickLower: -600, tickUpper: 600,
             liquidityDelta: int256(1_000e18), salt: bytes32(0)
         });
@@ -691,7 +690,7 @@ contract TestILShieldHook is Test {
         hook.afterAddLiquidity(LP, poolKey, addParams, addDelta, addDelta, abi.encode(LP));
 
         // Remove at same price — no IL
-        IPoolManager.ModifyLiquidityParams memory removeParams = IPoolManager.ModifyLiquidityParams({
+        ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
             tickLower: -600, tickUpper: 600,
             liquidityDelta: -int256(1_000e18), salt: bytes32(0)
         });
@@ -707,14 +706,14 @@ contract TestILShieldHook is Test {
     }
 
     function test_AfterRemoveLiquidity_ClearsSnapshot() public {
-        IPoolManager.ModifyLiquidityParams memory addParams = IPoolManager.ModifyLiquidityParams({
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
             tickLower: -600, tickUpper: 600,
             liquidityDelta: int256(1_000e18), salt: bytes32(0)
         });
         vm.prank(POOL_MGR);
         hook.afterAddLiquidity(LP, poolKey, addParams, _makeDelta(-1e18, -2_000e18), _makeDelta(0, 0), abi.encode(LP));
 
-        IPoolManager.ModifyLiquidityParams memory removeParams = IPoolManager.ModifyLiquidityParams({
+        ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
             tickLower: -600, tickUpper: 600,
             liquidityDelta: -int256(1_000e18), salt: bytes32(0)
         });
@@ -729,7 +728,7 @@ contract TestILShieldHook is Test {
     }
 
     function test_OnlyPoolManager_CanCallHooks() public {
-        IPoolManager.ModifyLiquidityParams memory params = IPoolManager.ModifyLiquidityParams({
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower: -600, tickUpper: 600,
             liquidityDelta: int256(1_000e18), salt: bytes32(0)
         });
@@ -742,7 +741,7 @@ contract TestILShieldHook is Test {
         vm.prank(OWNER);
         hook.emergencyPause(true);
 
-        IPoolManager.ModifyLiquidityParams memory params = IPoolManager.ModifyLiquidityParams({
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower: -600, tickUpper: 600,
             liquidityDelta: int256(1_000e18), salt: bytes32(0)
         });
@@ -929,7 +928,7 @@ contract MockPoolManagerV4 {
 
     function modifyLiquidity(
         PoolKey calldata,
-        IPoolManager.ModifyLiquidityParams calldata params,
+        ModifyLiquidityParams calldata params,
         bytes calldata
     ) external pure returns (BalanceDelta delta, BalanceDelta feesAccrued) {
         if (params.liquidityDelta == 0) {

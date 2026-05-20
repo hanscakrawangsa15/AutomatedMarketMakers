@@ -75,6 +75,40 @@ export const AUTO_COMPOUNDER_ABI = [
     inputs:  [{ name: "positionId", type: "bytes32" }],
     outputs: [{ name: "", type: "uint8" }],
   },
+  {
+    name: "getPositionsByOwner",
+    type: "function",
+    stateMutability: "view",
+    inputs:  [{ name: "owner", type: "address" }],
+    outputs: [{ name: "", type: "bytes32[]" }],
+  },
+  {
+    name: "PositionOpened",
+    type: "event",
+    inputs: [
+      { name: "id",      type: "bytes32", indexed: true  },
+      { name: "owner",   type: "address", indexed: true  },
+      { name: "poolId",  type: "bytes32", indexed: true  },
+      { name: "tL",      type: "int24",   indexed: false },
+      { name: "tU",      type: "int24",   indexed: false },
+      { name: "a0",      type: "uint256", indexed: false },
+      { name: "a1",      type: "uint256", indexed: false },
+    ],
+  },
+  {
+    name: "PositionClosed",
+    type: "event",
+    inputs: [
+      { name: "id",    type: "bytes32", indexed: true },
+      { name: "owner", type: "address", indexed: true },
+      { name: "r0",    type: "uint256", indexed: false },
+      { name: "r1",    type: "uint256", indexed: false },
+      { name: "tf0",   type: "uint256", indexed: false },
+      { name: "tf1",   type: "uint256", indexed: false },
+      { name: "il",    type: "uint256", indexed: false },
+      { name: "cycles",type: "uint256", indexed: false },
+    ],
+  },
 ] as const;
 
 // ─── AutoRangeHook ABI (subset) ───────────────────────────────────

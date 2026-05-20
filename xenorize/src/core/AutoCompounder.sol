@@ -8,8 +8,7 @@ import {PoolKey}         from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {Currency}        from "@uniswap/v4-core/src/types/Currency.sol";
-// PoolOperation.sol not in this v4-core version — types are on IPoolManager
-import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 // ─── OpenZeppelin ─────────────────────────────────────────────────
 import {IERC20}         from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -162,6 +161,7 @@ contract XenorizeAutoCompounder is IUnlockCallback, ReentrancyGuard, Pausable {
         lastCompoundBlock[positionId] = block.number; // prevent same-block compound on open
 
         totalTVL += depositVal;
+        _syncFundTVL();
         totalPositions++;
 
         // Add liquidity to V4 via unlock pattern
@@ -237,6 +237,7 @@ contract XenorizeAutoCompounder is IUnlockCallback, ReentrancyGuard, Pausable {
         lastCompoundBlock[positionId] = block.number; // prevent same-block compound on open
 
         totalTVL += depositVal;
+        _syncFundTVL();
         totalPositions++;
 
         int256 liqDelta = _liquidityForAmounts(key, tickLower, tickUpper, amount0, amount1);
@@ -360,6 +361,7 @@ contract XenorizeAutoCompounder is IUnlockCallback, ReentrancyGuard, Pausable {
 
         totalTVL = totalTVL > pos.initialCapital0 + pos.initialCapital1
             ? totalTVL - pos.initialCapital0 - pos.initialCapital1 : 0;
+        _syncFundTVL();
 
         if (returned0 > 0) token0.safeTransfer(pos.owner, returned0);
         if (returned1 > 0) token1.safeTransfer(pos.owner, returned1);
@@ -447,9 +449,9 @@ contract XenorizeAutoCompounder is IUnlockCallback, ReentrancyGuard, Pausable {
 
         uint128 newLiquidity = abi.decode(readdResult, (uint128));
 
-        // Forward protocol fees to owner (they remain in contract after re-add)
-        if (result.protocolFee0 > 0) token0.safeTransfer(owner, result.protocolFee0);
-        if (result.protocolFee1 > 0) token1.safeTransfer(owner, result.protocolFee1);
+        // Route protocol fees: primary-asset token goes to InsuranceFund, other token to owner.
+        _routeProtocolFee(token0, result.protocolFee0);
+        _routeProtocolFee(token1, result.protocolFee1);
 
         // Update position state — save prevCapital before overwriting
         uint256 oldCycle       = pos.compoundCount;
@@ -495,7 +497,7 @@ contract XenorizeAutoCompounder is IUnlockCallback, ReentrancyGuard, Pausable {
     function _cbAddLiquidity(UnlockData memory d) internal returns (bytes memory) {
         (BalanceDelta delta,) = poolManager.modifyLiquidity(
             d.key,
-            IPoolManager.ModifyLiquidityParams({
+            ModifyLiquidityParams({
                 tickLower:      d.tickLower,
                 tickUpper:      d.tickUpper,
                 liquidityDelta: d.liquidityDelta,
@@ -529,7 +531,7 @@ contract XenorizeAutoCompounder is IUnlockCallback, ReentrancyGuard, Pausable {
     function _cbRemoveLiquidity(UnlockData memory d) internal returns (bytes memory) {
         (BalanceDelta delta,) = poolManager.modifyLiquidity(
             d.key,
-            IPoolManager.ModifyLiquidityParams({
+            ModifyLiquidityParams({
                 tickLower:      d.tickLower,
                 tickUpper:      d.tickUpper,
                 liquidityDelta: d.liquidityDelta,
@@ -560,7 +562,7 @@ contract XenorizeAutoCompounder is IUnlockCallback, ReentrancyGuard, Pausable {
     function _cbCollectFees(UnlockData memory d) internal returns (bytes memory) {
         (, BalanceDelta feesAccrued) = poolManager.modifyLiquidity(
             d.key,
-            IPoolManager.ModifyLiquidityParams({
+            ModifyLiquidityParams({
                 tickLower:      d.tickLower,
                 tickUpper:      d.tickUpper,
                 liquidityDelta: 0,
@@ -645,6 +647,30 @@ contract XenorizeAutoCompounder is IUnlockCallback, ReentrancyGuard, Pausable {
         if (h > 24) return CompoundUrgency.Medium;
         if (h > 6)  return CompoundUrgency.Low;
         return CompoundUrgency.None;
+    }
+
+    // ─── Private helpers ──────────────────────────────────────────
+
+    /// @dev Pushes current totalTVL to InsuranceFund so its health ratio stays accurate.
+    ///      Wrapped in try/catch — succeeds only after the deployer calls
+    ///      insuranceFund.setAuthorizedDepositor(address(this), true).
+    function _syncFundTVL() private {
+        try insuranceFund.updateTVL(totalTVL) {} catch {}
+    }
+
+    /// @dev Routes a protocol-fee amount to InsuranceFund if `token` is the fund's
+    ///      primary asset; otherwise falls back to sending to the owner wallet.
+    function _routeProtocolFee(IERC20 token, uint256 amount) private {
+        if (amount == 0) return;
+        if (address(token) == insuranceFund.asset()) {
+            token.forceApprove(address(insuranceFund), amount);
+            try insuranceFund.depositFee(amount) {
+                return;
+            } catch {}
+            // depositFee failed (e.g. not authorized yet) — fall through to owner
+            token.forceApprove(address(insuranceFund), 0);
+        }
+        token.safeTransfer(owner, amount);
     }
 
     // ─── Admin ────────────────────────────────────────────────────

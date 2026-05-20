@@ -130,10 +130,161 @@ class XenorizeKeeperBot {
     this._startStatsServer();
     setInterval(() => this._printStats(), 60_000);
 
+    // Auto-discover all positions from on-chain events
+    await this._discoverPositions();
+
+    // Watch for new positions in real-time
+    this._watchPositionEvents();
+
     while (true) {
       await this._runCycle();
       await this._sleep(CONFIG.checkIntervalMs);
     }
+  }
+
+  // ─── Auto-discover positions from PositionOpened events ──────────
+
+  private async _discoverPositions(): Promise<void> {
+    if (!CONFIG.autoCompounder) return;
+    try {
+      const currentBlock = await this.publicClient.getBlockNumber();
+      // Scan from block 0 (local Anvil) — in production limit to last N blocks
+      const fromBlock = 0n;
+
+      log("info", `Scanning for PositionOpened events from block ${fromBlock} to ${currentBlock}…`);
+
+      const logs = await this.publicClient.getLogs({
+        address:   CONFIG.autoCompounder,
+        event:     {
+          name:    "PositionOpened",
+          type:    "event",
+          inputs: [
+            { name: "id",     type: "bytes32", indexed: true  },
+            { name: "owner",  type: "address", indexed: true  },
+            { name: "poolId", type: "bytes32", indexed: true  },
+            { name: "tL",     type: "int24",   indexed: false },
+            { name: "tU",     type: "int24",   indexed: false },
+            { name: "a0",     type: "uint256", indexed: false },
+            { name: "a1",     type: "uint256", indexed: false },
+          ],
+        },
+        fromBlock,
+        toBlock: currentBlock,
+      });
+
+      // Track which positions were later closed
+      const closedLogs = await this.publicClient.getLogs({
+        address:   CONFIG.autoCompounder,
+        event:     {
+          name:    "PositionClosed",
+          type:    "event",
+          inputs: [
+            { name: "id",     type: "bytes32", indexed: true  },
+            { name: "owner",  type: "address", indexed: true  },
+            { name: "r0",     type: "uint256", indexed: false },
+            { name: "r1",     type: "uint256", indexed: false },
+            { name: "tf0",    type: "uint256", indexed: false },
+            { name: "tf1",    type: "uint256", indexed: false },
+            { name: "il",     type: "uint256", indexed: false },
+            { name: "cycles", type: "uint256", indexed: false },
+          ],
+        },
+        fromBlock,
+        toBlock: currentBlock,
+      });
+
+      const closedIds = new Set(closedLogs.map(l => l.args.id as `0x${string}`));
+
+      let added = 0;
+      for (const l of logs) {
+        const id = l.args.id as `0x${string}`;
+        if (!closedIds.has(id)) {
+          this.watchedPositions.add(id);
+          added++;
+        }
+      }
+
+      log("info", `Discovered ${added} active position(s) from chain history`);
+    } catch (err) {
+      log("warn", "Position discovery failed — will rely on WATCHED_POSITIONS", err);
+    }
+  }
+
+  // ─── Watch for new PositionOpened / PositionClosed events ────────
+
+  private _watchPositionEvents(): void {
+    if (!CONFIG.autoCompounder) return;
+
+    // Poll getLogs every cycle for new events (viem watchContractEvent not needed for polling)
+    let lastScannedBlock = 0n;
+
+    this.publicClient.getBlockNumber().then(b => { lastScannedBlock = b; });
+
+    const pollNewEvents = async () => {
+      try {
+        const current = await this.publicClient.getBlockNumber();
+        if (current <= lastScannedBlock) return;
+
+        const newOpened = await this.publicClient.getLogs({
+          address:   CONFIG.autoCompounder,
+          event:     {
+            name:   "PositionOpened",
+            type:   "event",
+            inputs: [
+              { name: "id",     type: "bytes32", indexed: true  },
+              { name: "owner",  type: "address", indexed: true  },
+              { name: "poolId", type: "bytes32", indexed: true  },
+              { name: "tL",     type: "int24",   indexed: false },
+              { name: "tU",     type: "int24",   indexed: false },
+              { name: "a0",     type: "uint256", indexed: false },
+              { name: "a1",     type: "uint256", indexed: false },
+            ],
+          },
+          fromBlock: lastScannedBlock + 1n,
+          toBlock:   current,
+        });
+
+        for (const l of newOpened) {
+          const id = l.args.id as `0x${string}`;
+          this.watchedPositions.add(id);
+          log("info", `🆕 New position detected on-chain: ${id.slice(0, 14)}…`);
+        }
+
+        const newClosed = await this.publicClient.getLogs({
+          address:   CONFIG.autoCompounder,
+          event:     {
+            name:   "PositionClosed",
+            type:   "event",
+            inputs: [
+              { name: "id",     type: "bytes32", indexed: true  },
+              { name: "owner",  type: "address", indexed: true  },
+              { name: "r0",     type: "uint256", indexed: false },
+              { name: "r1",     type: "uint256", indexed: false },
+              { name: "tf0",    type: "uint256", indexed: false },
+              { name: "tf1",    type: "uint256", indexed: false },
+              { name: "il",     type: "uint256", indexed: false },
+              { name: "cycles", type: "uint256", indexed: false },
+            ],
+          },
+          fromBlock: lastScannedBlock + 1n,
+          toBlock:   current,
+        });
+
+        for (const l of newClosed) {
+          const id = l.args.id as `0x${string}`;
+          this.watchedPositions.delete(id);
+          log("info", `🗑 Position closed, removed from watch: ${id.slice(0, 14)}…`);
+        }
+
+        lastScannedBlock = current;
+      } catch (err) {
+        log("debug", "Event poll error", err);
+      }
+    };
+
+    // Poll every check interval
+    setInterval(pollNewEvents, CONFIG.checkIntervalMs);
+    log("info", "Watching for new PositionOpened / PositionClosed events…");
   }
 
   // ─── HTTP Stats Server (port 3001) ──────────────────────────────

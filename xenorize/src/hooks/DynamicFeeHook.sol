@@ -11,14 +11,12 @@ import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/type
 import {Hooks}           from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {LPFeeLibrary}    from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 import {Currency}        from "@uniswap/v4-core/src/types/Currency.sol";
-// PoolOperation.sol not in this v4-core version — types are on IPoolManager
-import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 // ─── Xenorize ─────────────────────────────────────────────────────
 import {XenorizeMath}    from "../libraries/XenorizeMath.sol";
 import {FeeState, Xenorize__ZeroAddress, Xenorize__Unauthorized, Xenorize__EmergencyPaused, Xenorize__TimelockNotElapsed} from "../types/XenorizeTypes.sol";
 import {IXenorizeOracle, IInsuranceFund, AggregatorV3Interface} from "../interfaces/IXenorize.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @title XenorizeDynamicFeeHook
 /// @notice Uniswap V4 hook that provides dynamic fees based on volatility, swap size, and MEV detection.
@@ -141,7 +139,7 @@ contract XenorizeDynamicFeeHook is IHooks {
     function beforeSwap(
         address sender,
         PoolKey calldata key,
-        IPoolManager.SwapParams calldata params,
+        SwapParams calldata params,
         bytes calldata
     ) external override onlyPoolManager whenNotPaused returns (bytes4, BeforeSwapDelta, uint24) {
         PoolId poolId = key.toId();
@@ -176,33 +174,26 @@ contract XenorizeDynamicFeeHook is IHooks {
     }
 
     /// @notice Called by PoolManager after every swap.
-    ///         Routes MEV premium to InsuranceFund if MEV was detected.
+    ///         Clears the per-pool MEV flag set in beforeSwap and emits tracking event.
+    ///
+    /// NOTE on MEV fee routing: calling poolManager.take() from inside a hook callback
+    /// creates an unresolved V4 settlement delta that causes the entire swap to revert.
+    /// Routing hook fees at the swap level requires the afterSwapReturnDelta permission
+    /// bit, which needs a different hook address (re-mine with HookMiner).
+    /// For now the MEV premium is collected as part of the LP fee (benefits LPs), and
+    /// vault income comes from protocol fees routed by AutoCompounder._routeProtocolFee().
     function afterSwap(
         address,
         PoolKey calldata key,
-        IPoolManager.SwapParams calldata,
-        BalanceDelta delta,
+        SwapParams calldata,
+        BalanceDelta,
         bytes calldata
     ) external override onlyPoolManager whenNotPaused returns (bytes4, int128) {
         PoolId poolId = key.toId();
 
         if (_mevFlag[poolId]) {
             _mevFlag[poolId] = false;
-
-            // Route MEV fee (50 BPS of unspecified token delta) to insurance fund.
-            // Only routes if the pool's currency1 matches the fund's primary asset.
-            int128 unspecified = delta.amount1();
-            if (unspecified < 0 && address(insuranceFund) != address(0)) {
-                uint256 mevFee = (uint256(uint128(-unspecified)) * 50) / BPS_MAX;
-                address token1 = Currency.unwrap(key.currency1);
-                if (mevFee > 0 && token1 == insuranceFund.asset()) {
-                    try poolManager.take(key.currency1, address(this), mevFee) {
-                        IERC20(token1).approve(address(insuranceFund), mevFee);
-                        insuranceFund.depositFee(mevFee);
-                        emit MEVFeeRouted(poolId, mevFee);
-                    } catch {}
-                }
-            }
+            emit MEVFeeRouted(poolId, 0); // amount=0: premium stayed as LP fee this cycle
         }
 
         return (IHooks.afterSwap.selector, 0);
@@ -218,13 +209,13 @@ contract XenorizeDynamicFeeHook is IHooks {
     function afterInitialize(address, PoolKey calldata, uint160, int24) external pure override returns (bytes4) {
         revert();
     }
-    function beforeAddLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, bytes calldata)
+    function beforeAddLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
         external pure override returns (bytes4) { revert(); }
-    function afterAddLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, BalanceDelta, BalanceDelta, bytes calldata)
+    function afterAddLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, BalanceDelta, BalanceDelta, bytes calldata)
         external pure override returns (bytes4, BalanceDelta) { revert(); }
-    function beforeRemoveLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, bytes calldata)
+    function beforeRemoveLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
         external pure override returns (bytes4) { revert(); }
-    function afterRemoveLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, BalanceDelta, BalanceDelta, bytes calldata)
+    function afterRemoveLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, BalanceDelta, BalanceDelta, bytes calldata)
         external pure override returns (bytes4, BalanceDelta) { revert(); }
     function beforeDonate(address, PoolKey calldata, uint256, uint256, bytes calldata)
         external pure override returns (bytes4) { revert(); }
@@ -249,7 +240,7 @@ contract XenorizeDynamicFeeHook is IHooks {
     }
 
     /// @notice Estimate USD value of swap from params.amountSpecified using oracle price.
-    function _estimateSwapUSD(PoolKey calldata key, IPoolManager.SwapParams calldata params)
+    function _estimateSwapUSD(PoolKey calldata key, SwapParams calldata params)
         internal view returns (uint256)
     {
         int256 amt = params.amountSpecified;

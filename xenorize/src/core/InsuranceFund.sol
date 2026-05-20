@@ -48,7 +48,7 @@ contract XenorizeInsuranceFund is ERC4626, IInsuranceFund, ReentrancyGuard, Paus
     uint256 public totalPaidOut;    // cumulative IL compensation paid
     uint256 public totalFeeIncome;  // cumulative protocol fee income received
 
-    mapping(address => uint256) public lastClaimTime;
+    mapping(bytes32 => uint256) public lastPositionClaimTime; // cooldown per positionId
     mapping(bytes32 => uint256) public positionTotalClaimed;
     mapping(address => bool)    public authorizedDepositors;
 
@@ -111,7 +111,7 @@ contract XenorizeInsuranceFund is ERC4626, IInsuranceFund, ReentrancyGuard, Paus
         address recipient = claim.recipient;
         if (recipient == address(0)) return (0, 0);
 
-        if (block.timestamp < lastClaimTime[recipient] + CLAIM_COOLDOWN) return (0, 0);
+        if (block.timestamp < lastPositionClaimTime[claim.positionId] + CLAIM_COOLDOWN) return (0, 0);
 
         _checkFundHealth();
 
@@ -124,9 +124,9 @@ contract XenorizeInsuranceFund is ERC4626, IInsuranceFund, ReentrancyGuard, Paus
 
         if (compensated0 == 0) return (0, 0);
 
-        totalPaidOut                          += compensated0;
-        lastClaimTime[recipient]               = block.timestamp;
-        positionTotalClaimed[claim.positionId] += compensated0;
+        totalPaidOut                                    += compensated0;
+        lastPositionClaimTime[claim.positionId]          = block.timestamp;
+        positionTotalClaimed[claim.positionId]          += compensated0;
 
         IERC20(asset()).safeTransfer(recipient, compensated0);
 
