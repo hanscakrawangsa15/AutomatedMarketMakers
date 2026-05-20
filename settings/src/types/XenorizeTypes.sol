@@ -105,6 +105,23 @@ struct FeeState {
     uint256 mevPremium;        // Additional fee for detected MEV (BPS)
 }
 
+/// @notice Ring buffer of on-chain tick observations for TWAP volatility
+/// @dev Fixed size of 24 slots — rolling 24-hour window at 1 obs/hour cadence
+struct ObservationBuffer {
+    int24[24]   ticks;       // Pool tick at each observation
+    uint256[24] timestamps;  // Block.timestamp at each observation
+    uint8       nextIndex;   // Next write slot (ring pointer)
+    uint8       count;       // Valid observations recorded (max 24)
+}
+
+/// @notice Per-pool fee configuration — overrides global defaults when initialized
+struct PoolConfig {
+    uint24  baseFee;          // Pool-specific base fee (BPS)
+    uint256 targetVolBps;     // Pool-specific calm-market volatility target
+    uint256 mevThresholdBps;  // Pool-specific MEV detection threshold
+    bool    initialized;      // True once a pool config has been explicitly set
+}
+
 // ─── CUSTOM ERRORS ───────────────────────────────────────────────
 // Using custom errors instead of require strings saves ~50 gas each
 

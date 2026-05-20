@@ -9,12 +9,14 @@ import PositionsList       from "./components/PositionsList.jsx";
 import AIStatusPanel       from "./components/AIStatusPanel.jsx";
 import PriceTicker         from "./components/PriceTicker.jsx";
 import ILShieldPanel       from "./components/ILShieldPanel.jsx";
+import TestPanel           from "./components/TestPanel.jsx";
+import KeeperPanel         from "./components/KeeperPanel.jsx";
 import { generateDemoData } from "./components/DemoMode.jsx";
 import { useProvider }      from "./lib/useProvider.js";
 import { useContractData }  from "./lib/useContractData.js";
 import { usePrices }        from "./lib/usePrices.js";
 
-const TABS = ["Overview", "Open Position", "My Positions", "AI Status"];
+const TABS = ["Overview", "Open Position", "My Positions", "AI Status", "Keeper", "Tests"];
 
 export default function App() {
   const { provider, account, chainId, error: connErr, connecting,
@@ -86,7 +88,9 @@ export default function App() {
             {t === "Overview"      && "📊 "}
             {t === "Open Position" && "➕ "}
             {t === "My Positions"  && "📋 "}
+            {t === "Tests"         && "🧪 "}
             {t === "AI Status"     && "🤖 "}
+            {t === "Keeper"        && "⚙️ "}
             {t}
           </button>
         ))}
@@ -157,6 +161,16 @@ export default function App() {
         {/* ── AI Status ──────────────────────────────────────── */}
         {tab === "AI Status" && (
           <AIStatusPanel data={data} prices={prices} />
+        )}
+
+        {/* ── Keeper Bot ─────────────────────────────────────── */}
+        {tab === "Keeper" && (
+          <KeeperPanel />
+        )}
+
+        {/* ── Tests ──────────────────────────────────────────── */}
+        {tab === "Tests" && (
+          <TestPanel />
         )}
 
       </main>

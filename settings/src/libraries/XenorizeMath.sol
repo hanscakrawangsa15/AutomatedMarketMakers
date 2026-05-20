@@ -80,14 +80,14 @@ library XenorizeMath {
     // ─── DYNAMIC FEE CALCULATION ─────────────────────────────────
 
     /// @notice Compute the adaptive fee based on market conditions
-    /// @dev Fee = baseFee + vol_premium + mev_premium + size_premium
+    /// @dev Fee = baseFee + vol_premium + size_premium + mevPremiumBps
     ///      All inputs in BPS, output capped at 10_000 BPS (100%)
     /// @param baseFee Base fee tier in BPS (e.g., 30 = 0.30%)
     /// @param volatilityBps Current volatility in BPS (10000 = 100% annualized)
     /// @param targetVolBps Target "calm" volatility in BPS
     /// @param swapSizeUSD Size of incoming swap in USD (WAD)
     /// @param poolTVLUSD Total pool TVL in USD (WAD)
-    /// @param mevDetected Whether MEV pattern was detected in this swap
+    /// @param mevPremiumBps MEV fee premium in BPS (0 = no MEV detected, computed dynamically)
     /// @return feeBps Final fee in BPS, capped at 10_000
     function computeDynamicFee(
         uint24  baseFee,
@@ -95,7 +95,7 @@ library XenorizeMath {
         uint256 targetVolBps,
         uint256 swapSizeUSD,
         uint256 poolTVLUSD,
-        bool    mevDetected
+        uint256 mevPremiumBps
     ) internal pure returns (uint24 feeBps) {
 
         uint256 fee = uint256(baseFee);
@@ -120,14 +120,40 @@ library XenorizeMath {
         }
 
         // ── MEV premium ─────────────────────────────────────────
-        // Detected arbitrage pays extra fee, redirected to LP
-        // Fee_mev = 50 BPS (0.5%) additional if MEV detected
-        if (mevDetected) {
-            fee += 50;
+        // Dynamic premium passed in — scales with detected price deviation
+        // Redirected to LP insurance fund via afterSwap
+        if (mevPremiumBps > 0) {
+            fee += mevPremiumBps;
         }
 
         // Cap at 10_000 BPS (100%) and cast to uint24
         feeBps = uint24(fee > BPS_MAX ? BPS_MAX : fee);
+    }
+
+    // ─── REALIZED VOLATILITY ─────────────────────────────────────
+
+    /// @notice Compute annualized realized volatility from on-chain tick observations
+    /// @dev Uses the identity: volBps = sqrt(Σ(Δtick²) * SECONDS_PER_YEAR / (N * window))
+    ///      Derivation: 1 tick ≈ 0.01% price move → log return = Δtick * 1e-4
+    ///      σ²_annual = Σ(Δtick² * 1e-8) / N * (SECONDS_PER_YEAR/window)
+    ///      σ_annual_bps = σ_annual * 10000 = sqrt(Σ(Δtick²) * SECONDS_PER_YEAR / (N * window))
+    /// @param sumSqTickDiffs Sum of squared tick-to-tick differences over the window
+    /// @param numReturns Number of return samples (= observations - 1)
+    /// @param windowSeconds Total duration of the observation window in seconds
+    /// @return volBps Annualized volatility in BPS (10_000 = 100%), capped at 20_000
+    function computeRealizedVolatility(
+        uint256 sumSqTickDiffs,
+        uint256 numReturns,
+        uint256 windowSeconds
+    ) internal pure returns (uint256 volBps) {
+        if (numReturns == 0 || windowSeconds == 0) return 0;
+
+        // volBps = sqrt(sumSqTickDiffs * SECONDS_PER_YEAR / (numReturns * windowSeconds))
+        uint256 inner = (sumSqTickDiffs * SECONDS_PER_YEAR) / (numReturns * windowSeconds);
+        volBps = sqrtApprox(inner);
+
+        // Cap at 200% annualized vol (extreme but possible in crypto)
+        if (volBps > 20_000) volBps = 20_000;
     }
 
     // ─── LOYALTY / veLP MULTIPLIER ───────────────────────────────

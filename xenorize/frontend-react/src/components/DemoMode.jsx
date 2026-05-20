@@ -36,34 +36,45 @@ export function generateDemoData(prices = null) {
   const totalILDetected   = totalILPaidOut / rand(0.3, 0.55);  // IL detected > compensated
   const totalCompensated  = totalILPaidOut;
   const avgLoyaltyDays    = Math.floor(rand(20, 75));
+  // Eligible = 50% IL cap × avg loyalty score (avgLoyaltyDays/90, capped at 1)
+  const avgLoyaltyScore   = Math.min(1, avgLoyaltyDays / 90);
+  const totalEligible     = totalILDetected * 0.5 * avgLoyaltyScore;
   const compensationRatePct = totalILDetected > 0
     ? (totalCompensated / totalILDetected) * 100
     : 0;
 
-  // 7-day IL history
+  // 7-day IL history — three series: detected, eligible claim, actual compensated
   const today = new Date();
   const ilHistory = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(today);
     d.setDate(d.getDate() - (6 - i));
-    const ilDay    = rand(500, 8000);
-    const compDay  = ilDay * rand(0.3, 0.5);
+    const ilDay        = rand(500, 8000);
+    // Eligible = 50% cap × loyalty score for that day's avg position age
+    const dayLoyalty   = Math.min(1, rand(15, 80) / 90);
+    const eligibleDay  = +(ilDay * 0.5 * dayLoyalty).toFixed(2);
+    // Actual paid ≤ eligible (fund health, lifetime caps can reduce further)
+    const compDay      = +(eligibleDay * rand(0.6, 1.0)).toFixed(2);
     return {
       day:          d.toLocaleDateString("en-US", { weekday: "short" }),
       ilDetected:   +ilDay.toFixed(2),
-      compensated:  +compDay.toFixed(2),
+      eligibleClaim: eligibleDay,
+      compensated:  compDay,
     };
   });
 
   // Recent claims
   const pools = ["ETH/USDC", "WBTC/ETH", "LINK/ETH"];
   const recentClaims = Array.from({ length: Math.min(totalClaimsPaid, 5) }, (_, i) => {
-    const days = Math.floor(rand(1, 90));
-    const ilAmt = rand(200, 5000);
+    const days          = Math.floor(rand(1, 90));
+    const loyaltyScore  = Math.min(1, days / 90);
+    const ilAmt         = rand(200, 5000);
+    const eligible      = ilAmt * 0.5 * loyaltyScore;
     return {
       lp:           `0x${Math.floor(Math.random() * 0xffff).toString(16).padStart(4, "0")}…`,
       pool:         pools[i % pools.length],
       ilUSD:        ilAmt.toFixed(2),
-      compensation: (ilAmt * Math.min(1, days / 90) * 0.5).toFixed(2),
+      eligible:     eligible.toFixed(2),
+      compensation: (eligible * rand(0.6, 1.0)).toFixed(2),
       loyaltyDays:  days,
     };
   });
@@ -100,9 +111,11 @@ export function generateDemoData(prices = null) {
     ilShield: {
       activeSnapshots,
       totalClaimsPaid,
-      totalILDetected:   totalILDetected.toFixed(4),
-      totalCompensated:  totalCompensated.toFixed(4),
+      totalILDetected:     totalILDetected.toFixed(4),
+      totalEligible:       totalEligible.toFixed(4),
+      totalCompensated:    totalCompensated.toFixed(4),
       avgLoyaltyDays,
+      avgLoyaltyScore:     (avgLoyaltyScore * 100).toFixed(1),
       compensationRatePct: compensationRatePct.toFixed(2),
       ilHistory,
       recentClaims,

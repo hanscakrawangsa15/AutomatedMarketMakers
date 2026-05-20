@@ -11,7 +11,8 @@ import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/type
 import {Hooks}           from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {LPFeeLibrary}    from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 import {Currency}        from "@uniswap/v4-core/src/types/Currency.sol";
-import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+// PoolOperation.sol not in this v4-core version — types are on IPoolManager
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 
 // ─── Xenorize ─────────────────────────────────────────────────────
 import {XenorizeMath}    from "../libraries/XenorizeMath.sol";
@@ -140,7 +141,7 @@ contract XenorizeDynamicFeeHook is IHooks {
     function beforeSwap(
         address sender,
         PoolKey calldata key,
-        SwapParams calldata params,
+        IPoolManager.SwapParams calldata params,
         bytes calldata
     ) external override onlyPoolManager whenNotPaused returns (bytes4, BeforeSwapDelta, uint24) {
         PoolId poolId = key.toId();
@@ -179,7 +180,7 @@ contract XenorizeDynamicFeeHook is IHooks {
     function afterSwap(
         address,
         PoolKey calldata key,
-        SwapParams calldata,
+        IPoolManager.SwapParams calldata,
         BalanceDelta delta,
         bytes calldata
     ) external override onlyPoolManager whenNotPaused returns (bytes4, int128) {
@@ -217,13 +218,13 @@ contract XenorizeDynamicFeeHook is IHooks {
     function afterInitialize(address, PoolKey calldata, uint160, int24) external pure override returns (bytes4) {
         revert();
     }
-    function beforeAddLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
+    function beforeAddLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, bytes calldata)
         external pure override returns (bytes4) { revert(); }
-    function afterAddLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, BalanceDelta, BalanceDelta, bytes calldata)
+    function afterAddLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, BalanceDelta, BalanceDelta, bytes calldata)
         external pure override returns (bytes4, BalanceDelta) { revert(); }
-    function beforeRemoveLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
+    function beforeRemoveLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, bytes calldata)
         external pure override returns (bytes4) { revert(); }
-    function afterRemoveLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, BalanceDelta, BalanceDelta, bytes calldata)
+    function afterRemoveLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, BalanceDelta, BalanceDelta, bytes calldata)
         external pure override returns (bytes4, BalanceDelta) { revert(); }
     function beforeDonate(address, PoolKey calldata, uint256, uint256, bytes calldata)
         external pure override returns (bytes4) { revert(); }
@@ -248,7 +249,7 @@ contract XenorizeDynamicFeeHook is IHooks {
     }
 
     /// @notice Estimate USD value of swap from params.amountSpecified using oracle price.
-    function _estimateSwapUSD(PoolKey calldata key, SwapParams calldata params)
+    function _estimateSwapUSD(PoolKey calldata key, IPoolManager.SwapParams calldata params)
         internal view returns (uint256)
     {
         int256 amt = params.amountSpecified;

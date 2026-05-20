@@ -8,7 +8,8 @@ import {PoolKey}         from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {Currency}        from "@uniswap/v4-core/src/types/Currency.sol";
-import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+// PoolOperation.sol not in this v4-core version — types are on IPoolManager
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 
 // ─── OpenZeppelin ─────────────────────────────────────────────────
 import {IERC20}         from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -494,7 +495,7 @@ contract XenorizeAutoCompounder is IUnlockCallback, ReentrancyGuard, Pausable {
     function _cbAddLiquidity(UnlockData memory d) internal returns (bytes memory) {
         (BalanceDelta delta,) = poolManager.modifyLiquidity(
             d.key,
-            ModifyLiquidityParams({
+            IPoolManager.ModifyLiquidityParams({
                 tickLower:      d.tickLower,
                 tickUpper:      d.tickUpper,
                 liquidityDelta: d.liquidityDelta,
@@ -528,7 +529,7 @@ contract XenorizeAutoCompounder is IUnlockCallback, ReentrancyGuard, Pausable {
     function _cbRemoveLiquidity(UnlockData memory d) internal returns (bytes memory) {
         (BalanceDelta delta,) = poolManager.modifyLiquidity(
             d.key,
-            ModifyLiquidityParams({
+            IPoolManager.ModifyLiquidityParams({
                 tickLower:      d.tickLower,
                 tickUpper:      d.tickUpper,
                 liquidityDelta: d.liquidityDelta,
@@ -559,7 +560,7 @@ contract XenorizeAutoCompounder is IUnlockCallback, ReentrancyGuard, Pausable {
     function _cbCollectFees(UnlockData memory d) internal returns (bytes memory) {
         (, BalanceDelta feesAccrued) = poolManager.modifyLiquidity(
             d.key,
-            ModifyLiquidityParams({
+            IPoolManager.ModifyLiquidityParams({
                 tickLower:      d.tickLower,
                 tickUpper:      d.tickUpper,
                 liquidityDelta: 0,

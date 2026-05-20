@@ -1,7 +1,14 @@
-import React, { useState, useCallback } from "react";
-import { Contract, parseUnits, formatUnits } from "ethers";
+import React, { useState, useCallback, useEffect } from "react";
+import { Contract, parseUnits, MaxUint256 } from "ethers";
 import { ADDRESSES, AUTO_COMPOUNDER_ABI } from "../lib/contracts.js";
-import { priceRangeToTicks, tickToPrice, formatPrice, TICK_SPACINGS } from "../lib/tickMath.js";
+import { priceRangeToTicks, TICK_SPACINGS } from "../lib/tickMath.js";
+
+const ERC20_ABI = [
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function approve(address spender, uint256 amount) returns (bool)",
+  "function balanceOf(address) view returns (uint256)",
+  "function symbol() view returns (string)",
+];
 
 const RISK_PROFILES = ["Conservative", "Balanced", "Aggressive"];
 const RISK_COLORS   = ["#10b981", "#6366f1", "#ef4444"];
@@ -15,25 +22,25 @@ const DEFAULT_CONFIG = {
   autoRebalance: true,
 };
 
-// Minimal demo PoolKey — in production this comes from chain/subgraph
+// PoolKey uses token addresses from ADDRESSES (synced by sync-addresses.js)
 const DEMO_POOLS = [
   {
-    label: "ETH / USDC (0.05%)",
-    currency0: "0x5FbDB2315678afecb367f032d93F642f64180aa3",
-    currency1: "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+    label: "Token0 / Token1 (0.05%)",
+    get currency0() { return ADDRESSES.token0 || "0x5FbDB2315678afecb367f032d93F642f64180aa3"; },
+    get currency1() { return ADDRESSES.token1 || "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"; },
     fee: 500,
     tickSpacing: 10,
     hooks: "0x0000000000000000000000000000000000000000",
-    midPrice: 3200, // approx ETH/USDC
+    midPrice: 1,
   },
   {
-    label: "WBTC / ETH (0.3%)",
-    currency0: "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
-    currency1: "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+    label: "Token0 / Token1 (0.3%)",
+    get currency0() { return ADDRESSES.token0 || "0x5FbDB2315678afecb367f032d93F642f64180aa3"; },
+    get currency1() { return ADDRESSES.token1 || "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"; },
     fee: 3000,
     tickSpacing: 60,
     hooks: "0x0000000000000000000000000000000000000000",
-    midPrice: 0.052, // approx WBTC/ETH
+    midPrice: 1,
   },
 ];
 
@@ -46,10 +53,29 @@ export default function OpenPositionPanel({ provider, account }) {
   const [amount0, setAmount0]     = useState("");
   const [amount1, setAmount1]     = useState("");
   const [busy, setBusy]           = useState(false);
+  const [step, setStep]           = useState("");   // approval progress label
   const [txHash, setTxHash]       = useState(null);
   const [error, setError]         = useState(null);
+  // Token addresses fetched live from AutoCompounder contract
+  const [liveToken0, setLiveToken0] = useState(ADDRESSES.token0 || "");
+  const [liveToken1, setLiveToken1] = useState(ADDRESSES.token1 || "");
 
-  const pool = DEMO_POOLS[poolIdx];
+  // On wallet connect, fetch actual token addresses from AutoCompounder
+  useEffect(() => {
+    if (!provider) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const signer = await provider.getSigner();
+        const c = new Contract(ADDRESSES.autoCompounder, AUTO_COMPOUNDER_ABI, signer);
+        const [t0, t1] = await Promise.all([c.token0(), c.token1()]);
+        if (!cancelled) { setLiveToken0(t0); setLiveToken1(t1); }
+      } catch (_) { /* contract not deployed — keep fallback */ }
+    })();
+    return () => { cancelled = true; };
+  }, [provider]);
+
+  const pool = { ...DEMO_POOLS[poolIdx], currency0: liveToken0, currency1: liveToken1 };
 
   // Derived tick preview
   let tickPreview = null;
@@ -64,14 +90,34 @@ export default function OpenPositionPanel({ provider, account }) {
     if (!provider || !account) { setError("Connect wallet first"); return; }
     setError(null);
     setBusy(true);
+    setStep("");
     setTxHash(null);
     try {
-      const signer    = await provider.getSigner();
+      const signer     = await provider.getSigner();
       const compounder = new Contract(ADDRESSES.autoCompounder, AUTO_COMPOUNDER_ABI, signer);
+      const spender    = ADDRESSES.autoCompounder;
 
       const amt0 = parseUnits(amount0 || "0", 18);
       const amt1 = parseUnits(amount1 || "0", 18);
 
+      // ── Step 1: ensure token approvals ──────────────────────────
+      const tokens = [
+        { addr: pool.currency0, amt: amt0, label: "Token0" },
+        { addr: pool.currency1, amt: amt1, label: "Token1" },
+      ];
+      for (const { addr, amt, label } of tokens) {
+        if (!addr || addr === "0x0000000000000000000000000000000000000000") continue;
+        const tok = new Contract(addr, ERC20_ABI, signer);
+        const allowed = await tok.allowance(account, spender);
+        if (allowed < amt) {
+          setStep(`Approving ${label}…`);
+          const approveTx = await tok.approve(spender, MaxUint256);
+          await approveTx.wait();
+        }
+      }
+
+      // ── Step 2: open position ────────────────────────────────────
+      setStep("Opening position…");
       const poolKey = {
         currency0:   pool.currency0,
         currency1:   pool.currency1,
@@ -79,7 +125,6 @@ export default function OpenPositionPanel({ provider, account }) {
         tickSpacing: pool.tickSpacing,
         hooks:       pool.hooks,
       };
-
       const config = {
         minProfitUSD:       DEFAULT_CONFIG.minProfitUSD,
         gasCushionBps:      DEFAULT_CONFIG.gasCushionBps,
@@ -93,20 +138,21 @@ export default function OpenPositionPanel({ provider, account }) {
       if (mode === "manual") {
         if (!tickPreview) throw new Error("Enter valid price range");
         tx = await compounder.openPosition(
-          poolKey,
-          tickPreview.tickLower,
-          tickPreview.tickUpper,
+          poolKey, tickPreview.tickLower, tickPreview.tickUpper,
           amt0, amt1, risk, config
         );
       } else {
         tx = await compounder.openPositionAI(poolKey, amt0, amt1, risk, config);
       }
 
+      setStep("Waiting for confirmation…");
       const receipt = await tx.wait();
       setTxHash(receipt.hash);
+      setStep("");
       setAmount0(""); setAmount1(""); setPriceLow(""); setPriceUp("");
     } catch (e) {
-      setError(e.reason ?? e.message);
+      setError(e.reason ?? e.shortMessage ?? e.message);
+      setStep("");
     } finally {
       setBusy(false);
     }
@@ -259,12 +305,21 @@ export default function OpenPositionPanel({ provider, account }) {
         className={`btn btn-open ${mode === "ai" ? "btn-ai" : "btn-primary"}`}
         onClick={handleOpen}
         disabled={busy || !provider}
+        style={!provider ? { opacity: 0.4, cursor: "not-allowed" } : {}}
       >
-        {busy ? "Opening…" : mode === "ai" ? "🤖 Open AI-Managed Position" : "✋ Open Manual Position"}
+        {busy
+          ? (step || "Processing…")
+          : !provider
+          ? "🔌 Connect Wallet to Continue"
+          : mode === "ai"
+          ? "🤖 Open AI-Managed Position"
+          : "✋ Open Manual Position"}
       </button>
 
       {!provider && (
-        <p className="form-note">Connect wallet to submit on-chain.</p>
+        <p className="form-note">
+          Click <strong>Connect Anvil</strong> (top-right) to enable on-chain transactions.
+        </p>
       )}
     </section>
   );

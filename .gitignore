@@ -1,0 +1,20 @@
+# Foundry build artifacts
+xenorize/out/
+xenorize/cache/
+xenorize/broadcast/*/31337/
+settings/out/
+settings/cache/
+
+# Node
+node_modules/
+xenorize/frontend-react/node_modules/
+xenorize/keeper-bot/node_modules/
+
+# Frontend build
+xenorize/frontend-react/dist/
+
+# Env files (keep .env.example)
+xenorize/keeper-bot/.env
+
+# OS
+.DS_Store
